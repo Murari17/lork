@@ -1,0 +1,244 @@
+"""Pydantic v2 settings and HTTP request/response models for loraforge server."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from loraforge.schemas import OptimParams, SampleParams, TrainerInitConfig
+
+
+class ServerSettings(BaseModel):
+    """Environment-configurable settings and limits for the HTTP server."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_keys: tuple[str, ...] = Field(..., min_length=1)
+    max_batch_size: int = Field(default=32, gt=0)
+    max_seq_len: int = Field(default=2048, gt=0)
+    max_sample_tokens: int = Field(default=512, gt=0)
+    max_prompts: int = Field(default=32, gt=0)
+    max_sessions: int = Field(default=8, gt=0)
+    session_idle_ttl_seconds: float = Field(default=1800.0, gt=0.0)
+    max_futures: int = Field(default=1000, gt=0)
+    future_ttl_seconds: float = Field(default=3600.0, gt=0.0)
+    checkpoint_root: Path = Path("checkpoints")
+    default_device: str = Field(default="cpu", pattern=r"^(cpu|mps|cuda(:\d+)?)$")
+
+    @field_validator("api_keys")
+    @classmethod
+    def _validate_api_keys(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(k.strip() for k in value if k.strip())
+        if not cleaned:
+            raise ValueError("api_keys must contain at least one non-empty key")
+        return cleaned
+
+    @classmethod
+    def from_env(cls) -> ServerSettings:
+        """Load ServerSettings from LORAFORGE_* environment variables."""
+        raw_keys = os.environ.get("LORAFORGE_API_KEYS", "")
+        keys = tuple(part.strip() for part in raw_keys.split(",") if part.strip())
+        if not keys:
+            raise ValueError(
+                "LORAFORGE_API_KEYS environment variable must specify at least one API key"
+            )
+        return cls(
+            api_keys=keys,
+            max_batch_size=int(os.environ.get("LORAFORGE_MAX_BATCH_SIZE", "32")),
+            max_seq_len=int(os.environ.get("LORAFORGE_MAX_SEQ_LEN", "2048")),
+            max_sample_tokens=int(os.environ.get("LORAFORGE_MAX_SAMPLE_TOKENS", "512")),
+            max_prompts=int(os.environ.get("LORAFORGE_MAX_PROMPTS", "32")),
+            max_sessions=int(os.environ.get("LORAFORGE_MAX_SESSIONS", "8")),
+            session_idle_ttl_seconds=float(
+                os.environ.get("LORAFORGE_SESSION_IDLE_TTL_SECONDS", "1800.0")
+            ),
+            max_futures=int(os.environ.get("LORAFORGE_MAX_FUTURES", "1000")),
+            future_ttl_seconds=float(
+                os.environ.get("LORAFORGE_FUTURE_TTL_SECONDS", "3600.0")
+            ),
+            checkpoint_root=Path(os.environ.get("LORAFORGE_CHECKPOINT_ROOT", "checkpoints")),
+            default_device=os.environ.get("LORAFORGE_DEVICE", "cpu"),
+        )
+
+
+def _validate_rect_2d_list(rows: list[list[Any]], name: str) -> tuple[int, int]:
+    if not rows:
+        raise ValueError(f"{name} must not be empty")
+    seq_len = len(rows[0])
+    if seq_len == 0:
+        raise ValueError(f"{name} rows must not be empty")
+    for idx, row in enumerate(rows):
+        if len(row) != seq_len:
+            raise ValueError(
+                f"{name} must be rectangular; row {idx} has length {len(row)} != {seq_len}"
+            )
+    return len(rows), seq_len
+
+
+class CreateSessionRequest(BaseModel):
+    """HTTP payload for creating a LoRA training session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_model: str = Field(..., min_length=1)
+    rank: int = Field(..., gt=0)
+    alpha: float = Field(..., gt=0.0)
+    target_modules: list[str] = Field(..., min_length=1)
+    device: str | None = None
+
+    def to_trainer_config(self, default_device: str) -> TrainerInitConfig:
+        """Validate session initialization parameters via shared TrainerInitConfig."""
+        return TrainerInitConfig(
+            base_model=self.base_model,
+            rank=self.rank,
+            alpha=self.alpha,
+            target_modules=self.target_modules,
+            device=self.device if self.device is not None else default_device,
+        )
+
+
+class WireBatch(BaseModel):
+    """JSON wire representation of a forward_backward token batch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_ids: list[list[int]] = Field(..., min_length=1)
+    target_ids: list[list[int]] = Field(..., min_length=1)
+    weights: list[list[float]] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_shapes(self) -> WireBatch:
+        b_in, t_in = _validate_rect_2d_list(self.input_ids, "input_ids")
+        b_tgt, t_tgt = _validate_rect_2d_list(self.target_ids, "target_ids")
+        b_w, t_w = _validate_rect_2d_list(self.weights, "weights")
+        if (b_tgt, t_tgt) != (b_in, t_in):
+            raise ValueError(
+                f"target_ids shape {(b_tgt, t_tgt)} does not match input_ids {(b_in, t_in)}"
+            )
+        if (b_w, t_w) != (b_in, t_in):
+            raise ValueError(
+                f"weights shape {(b_w, t_w)} does not match input_ids {(b_in, t_in)}"
+            )
+        total_weight = 0.0
+        for row in self.weights:
+            for val in row:
+                if val < 0.0:
+                    raise ValueError("weights must be non-negative")
+                total_weight += val
+        if total_weight <= 0.0:
+            raise ValueError("weights must sum to a positive value")
+        return self
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return len(self.input_ids), len(self.input_ids[0])
+
+
+class ForwardBackwardHttpRequest(BaseModel):
+    """HTTP payload for /v1/sessions/{session_id}/forward_backward."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch: WireBatch
+    loss_fn: Literal["cross_entropy"] | list[list[float]] = "cross_entropy"
+
+    @model_validator(mode="after")
+    def _validate_loss_shape(self) -> ForwardBackwardHttpRequest:
+        if isinstance(self.loss_fn, list):
+            adv_shape = _validate_rect_2d_list(self.loss_fn, "loss_fn")
+            if adv_shape != self.batch.shape:
+                raise ValueError(
+                    f"loss_fn advantage shape {adv_shape} does not match "
+                    f"batch shape {self.batch.shape}"
+                )
+        return self
+
+    def check_limits(self, settings: ServerSettings) -> None:
+        """Reject oversized batches with explicit ValueError (no truncation)."""
+        batch_size, seq_len = self.batch.shape
+        if batch_size > settings.max_batch_size:
+            raise ValueError(
+                f"batch size {batch_size} exceeds max_batch_size={settings.max_batch_size}"
+            )
+        if seq_len > settings.max_seq_len:
+            raise ValueError(
+                f"sequence length {seq_len} exceeds max_seq_len={settings.max_seq_len}"
+            )
+
+
+class OptimStepHttpRequest(BaseModel):
+    """HTTP payload for /v1/sessions/{session_id}/optim_step reusing schemas.OptimParams."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(..., min_length=1)
+    optim_params: OptimParams
+
+    @field_validator("step_id")
+    @classmethod
+    def _validate_step_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("step_id must not be empty or whitespace")
+        return stripped
+
+
+class SampleHttpRequest(BaseModel):
+    """HTTP payload for /v1/sessions/{session_id}/sample reusing schemas.SampleParams."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompts: list[str] = Field(..., min_length=1)
+    params: SampleParams
+
+    def check_limits(self, settings: ServerSettings) -> None:
+        """Reject oversized sample requests with explicit ValueError."""
+        if len(self.prompts) > settings.max_prompts:
+            raise ValueError(
+                f"prompt count {len(self.prompts)} exceeds max_prompts={settings.max_prompts}"
+            )
+        if self.params.max_tokens > settings.max_sample_tokens:
+            raise ValueError(
+                f"max_tokens {self.params.max_tokens} exceeds "
+                f"max_sample_tokens={settings.max_sample_tokens}"
+            )
+
+
+class StateHttpRequest(BaseModel):
+    """HTTP payload for save_state / load_state with strict checkpoint name rules."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
+class ErrorDetail(BaseModel):
+    """Structured error detail payload."""
+
+    code: str
+    message: str
+
+
+class ErrorEnvelope(BaseModel):
+    """Top-level structured error response body."""
+
+    error: ErrorDetail
+
+
+class FutureSubmittedResponse(BaseModel):
+    """202 Accepted response for async operations."""
+
+    future_id: str
+    session_id: str | None = None
+
+
+class FutureStatusResponse(BaseModel):
+    """Response for GET /v1/futures/{future_id}."""
+
+    future_id: str
+    status: Literal["pending", "done", "error"]
+    result: dict[str, Any] | None = None
+    error: ErrorDetail | None = None

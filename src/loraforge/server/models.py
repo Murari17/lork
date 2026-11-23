@@ -4,11 +4,24 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from loraforge.schemas import OptimParams, SampleParams, TrainerInitConfig
+from loraforge.wire import (
+    CreateSessionRequest,
+    ErrorDetail,
+    ErrorEnvelope,
+    ForwardBackwardWireRequest,
+    FutureStatusResponse,
+    FutureSubmittedResponse,
+    OptimParams,
+    OptimStepWireRequest,
+    SampleParams,
+    SampleWireRequest,
+    StateWireRequest,
+    TrainerInitConfig,
+    WireBatch,
+)
 
 
 class ServerSettings(BaseModel):
@@ -64,97 +77,8 @@ class ServerSettings(BaseModel):
         )
 
 
-def _validate_rect_2d_list(rows: list[list[Any]], name: str) -> tuple[int, int]:
-    if not rows:
-        raise ValueError(f"{name} must not be empty")
-    seq_len = len(rows[0])
-    if seq_len == 0:
-        raise ValueError(f"{name} rows must not be empty")
-    for idx, row in enumerate(rows):
-        if len(row) != seq_len:
-            raise ValueError(
-                f"{name} must be rectangular; row {idx} has length {len(row)} != {seq_len}"
-            )
-    return len(rows), seq_len
-
-
-class CreateSessionRequest(BaseModel):
-    """HTTP payload for creating a LoRA training session."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    base_model: str = Field(..., min_length=1)
-    rank: int = Field(..., gt=0)
-    alpha: float = Field(..., gt=0.0)
-    target_modules: list[str] = Field(..., min_length=1)
-    device: str | None = None
-
-    def to_trainer_config(self, default_device: str) -> TrainerInitConfig:
-        """Validate session initialization parameters via shared TrainerInitConfig."""
-        return TrainerInitConfig(
-            base_model=self.base_model,
-            rank=self.rank,
-            alpha=self.alpha,
-            target_modules=self.target_modules,
-            device=self.device if self.device is not None else default_device,
-        )
-
-
-class WireBatch(BaseModel):
-    """JSON wire representation of a forward_backward token batch."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    input_ids: list[list[int]] = Field(..., min_length=1)
-    target_ids: list[list[int]] = Field(..., min_length=1)
-    weights: list[list[float]] = Field(..., min_length=1)
-
-    @model_validator(mode="after")
-    def _validate_shapes(self) -> WireBatch:
-        b_in, t_in = _validate_rect_2d_list(self.input_ids, "input_ids")
-        b_tgt, t_tgt = _validate_rect_2d_list(self.target_ids, "target_ids")
-        b_w, t_w = _validate_rect_2d_list(self.weights, "weights")
-        if (b_tgt, t_tgt) != (b_in, t_in):
-            raise ValueError(
-                f"target_ids shape {(b_tgt, t_tgt)} does not match input_ids {(b_in, t_in)}"
-            )
-        if (b_w, t_w) != (b_in, t_in):
-            raise ValueError(
-                f"weights shape {(b_w, t_w)} does not match input_ids {(b_in, t_in)}"
-            )
-        total_weight = 0.0
-        for row in self.weights:
-            for val in row:
-                if val < 0.0:
-                    raise ValueError("weights must be non-negative")
-                total_weight += val
-        if total_weight <= 0.0:
-            raise ValueError("weights must sum to a positive value")
-        return self
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return len(self.input_ids), len(self.input_ids[0])
-
-
-class ForwardBackwardHttpRequest(BaseModel):
-    """HTTP payload for /v1/sessions/{session_id}/forward_backward."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    batch: WireBatch
-    loss_fn: Literal["cross_entropy"] | list[list[float]] = "cross_entropy"
-
-    @model_validator(mode="after")
-    def _validate_loss_shape(self) -> ForwardBackwardHttpRequest:
-        if isinstance(self.loss_fn, list):
-            adv_shape = _validate_rect_2d_list(self.loss_fn, "loss_fn")
-            if adv_shape != self.batch.shape:
-                raise ValueError(
-                    f"loss_fn advantage shape {adv_shape} does not match "
-                    f"batch shape {self.batch.shape}"
-                )
-        return self
+class ForwardBackwardHttpRequest(ForwardBackwardWireRequest):
+    """HTTP payload for /v1/sessions/{session_id}/forward_backward with server limits."""
 
     def check_limits(self, settings: ServerSettings) -> None:
         """Reject oversized batches with explicit ValueError (no truncation)."""
@@ -169,30 +93,12 @@ class ForwardBackwardHttpRequest(BaseModel):
             )
 
 
-class OptimStepHttpRequest(BaseModel):
-    """HTTP payload for /v1/sessions/{session_id}/optim_step reusing schemas.OptimParams."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    step_id: str = Field(..., min_length=1)
-    optim_params: OptimParams
-
-    @field_validator("step_id")
-    @classmethod
-    def _validate_step_id(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("step_id must not be empty or whitespace")
-        return stripped
+class OptimStepHttpRequest(OptimStepWireRequest):
+    """HTTP payload for /v1/sessions/{session_id}/optim_step reusing wire.OptimParams."""
 
 
-class SampleHttpRequest(BaseModel):
-    """HTTP payload for /v1/sessions/{session_id}/sample reusing schemas.SampleParams."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    prompts: list[str] = Field(..., min_length=1)
-    params: SampleParams
+class SampleHttpRequest(SampleWireRequest):
+    """HTTP payload for /v1/sessions/{session_id}/sample reusing wire.SampleParams."""
 
     def check_limits(self, settings: ServerSettings) -> None:
         """Reject oversized sample requests with explicit ValueError."""
@@ -207,38 +113,23 @@ class SampleHttpRequest(BaseModel):
             )
 
 
-class StateHttpRequest(BaseModel):
+class StateHttpRequest(StateWireRequest):
     """HTTP payload for save_state / load_state with strict checkpoint name rules."""
 
-    model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,64}$")
-
-
-class ErrorDetail(BaseModel):
-    """Structured error detail payload."""
-
-    code: str
-    message: str
-
-
-class ErrorEnvelope(BaseModel):
-    """Top-level structured error response body."""
-
-    error: ErrorDetail
-
-
-class FutureSubmittedResponse(BaseModel):
-    """202 Accepted response for async operations."""
-
-    future_id: str
-    session_id: str | None = None
-
-
-class FutureStatusResponse(BaseModel):
-    """Response for GET /v1/futures/{future_id}."""
-
-    future_id: str
-    status: Literal["pending", "done", "error"]
-    result: dict[str, Any] | None = None
-    error: ErrorDetail | None = None
+__all__ = [
+    "CreateSessionRequest",
+    "ErrorDetail",
+    "ErrorEnvelope",
+    "ForwardBackwardHttpRequest",
+    "FutureStatusResponse",
+    "FutureSubmittedResponse",
+    "OptimParams",
+    "OptimStepHttpRequest",
+    "SampleHttpRequest",
+    "SampleParams",
+    "ServerSettings",
+    "StateHttpRequest",
+    "TrainerInitConfig",
+    "WireBatch",
+]

@@ -6,26 +6,34 @@ build-backend = "setuptools.build_meta"
 name = "loraforge"
 version = "0.1.0"
 description = "Open-source LoRA fine-tuning service with low-level training primitives."
-readme = "ARCHITECTURE.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "accelerate==1.16.0",
-    "annotated-doc==0.0.7",
     "annotated-types==0.8.0",
     "anyio==4.16.0",
     "certifi==2026.11.20",
+    "h11==0.16.0",
+    "httpcore==1.0.9",
+    "httpx==0.28.1",
+    "idna==3.20",
+    "pydantic==2.14.4",
+    "pydantic-core==2.50.5",
+    "typing-extensions==4.16.0",
+    "typing-inspection==0.4.5",
+]
+
+[project.optional-dependencies]
+server = [
+    "accelerate==1.16.0",
+    "annotated-doc==0.0.7",
     "click==8.5.1",
     "fastapi==0.165.0",
     "filelock==4.3.0",
     "fsspec==2026.9.0",
-    "h11==0.16.0",
     "hf-xet==1.8.0",
-    "httpcore==1.0.9",
     "httpcore2==2.16.2",
-    "httpx==0.28.1",
     "httpx2==2.16.2",
     "huggingface-hub==2.4.0",
-    "idna==3.20",
     "jinja2==3.1.6",
     "markdown-it-py==4.3.0",
     "markupsafe==3.0.4",
@@ -37,8 +45,6 @@ dependencies = [
     "packaging==26.3",
     "peft==0.22.0",
     "psutil==7.2.2",
-    "pydantic==2.14.4",
-    "pydantic-core==2.50.5",
     "pygments==2.21.0",
     "pyyaml==6.0.4",
     "regex==2026.11.19",
@@ -53,12 +59,8 @@ dependencies = [
     "transformers==5.24.0",
     "truststore==0.10.5",
     "typer==0.29.2",
-    "typing-extensions==4.16.0",
-    "typing-inspection==0.4.5",
     "uvicorn==0.54.0",
 ]
-
-[project.optional-dependencies]
 dev = [
     "ast-serialize==0.13.1",
     "iniconfig==2.3.1",
@@ -80,7 +82,7 @@ loraforge = ["py.typed"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "examples"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -96,3 +98,6 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra"
+markers = [
+    "slow: slow integration or RL tests",
+]

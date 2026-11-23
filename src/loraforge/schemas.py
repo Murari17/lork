@@ -1,8 +1,7 @@
-"""Pydantic v2 input/output validation schemas for loraforge."""
+"""Pydantic v2 tensor and trainer validation schemas for loraforge."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import torch
@@ -10,9 +9,16 @@ from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
-    Field,
-    field_validator,
     model_validator,
+)
+
+from loraforge.wire import (
+    OptimParams,
+    OptimStepRequest,
+    SampleParams,
+    SampleRequest,
+    StatePathInput,
+    TrainerInitConfig,
 )
 
 
@@ -48,37 +54,6 @@ def _to_float32_tensor(value: Any) -> torch.Tensor:
 
 Int64Tensor2D = Annotated[torch.Tensor, BeforeValidator(_to_int64_tensor)]
 Float32Tensor2D = Annotated[torch.Tensor, BeforeValidator(_to_float32_tensor)]
-
-
-class TrainerInitConfig(BaseModel):
-    """Validated configuration for initializing a LoraTrainer."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    base_model: str = Field(..., min_length=1)
-    rank: int = Field(..., gt=0)
-    alpha: float = Field(..., gt=0.0)
-    target_modules: list[str] = Field(..., min_length=1)
-    device: str = Field(default="cpu", pattern=r"^(cpu|mps|cuda(:\d+)?)$")
-
-    @field_validator("base_model")
-    @classmethod
-    def _validate_base_model(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("base_model must not be empty or whitespace")
-        return stripped
-
-    @field_validator("target_modules")
-    @classmethod
-    def _validate_target_modules(cls, value: list[str]) -> list[str]:
-        cleaned: list[str] = []
-        for item in value:
-            stripped = item.strip()
-            if not stripped:
-                raise ValueError("target_modules entries must not be empty")
-            cleaned.append(stripped)
-        return cleaned
 
 
 class ForwardBackwardBatch(BaseModel):
@@ -158,76 +133,16 @@ def validate_loss_fn(
     return validated.advantages
 
 
-class OptimParams(BaseModel):
-    """Validated AdamW hyperparameters for optim_step."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    lr: float = Field(..., gt=0.0)
-    betas: tuple[float, float] = (0.9, 0.999)
-    weight_decay: float = Field(default=0.0, ge=0.0)
-    eps: float = Field(default=1e-8, gt=0.0)
-
-    @field_validator("betas")
-    @classmethod
-    def _validate_betas(cls, value: tuple[float, float]) -> tuple[float, float]:
-        b1, b2 = value
-        if not (0.0 < b1 < 1.0 and 0.0 < b2 < 1.0):
-            raise ValueError(f"betas must each be strictly between 0 and 1, got {value}")
-        return value
-
-
-class OptimStepRequest(BaseModel):
-    """Validated inputs to optim_step."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    step_id: str = Field(..., min_length=1)
-    optim_params: OptimParams
-
-    @field_validator("step_id")
-    @classmethod
-    def _validate_step_id(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("step_id must not be empty or whitespace")
-        return stripped
-
-
-class SampleParams(BaseModel):
-    """Validated decoding parameters for sample."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    max_tokens: int = Field(..., gt=0)
-    temperature: float = Field(default=1.0, ge=0.0)
-
-
-class SampleRequest(BaseModel):
-    """Validated inputs to sample."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    prompts: list[str] = Field(..., min_length=1)
-    params: SampleParams
-
-
-class StatePathInput(BaseModel):
-    """Validated filesystem path for save_state / load_state."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    path: Path
-
-    @field_validator("path", mode="before")
-    @classmethod
-    def _validate_path(cls, value: Any) -> Path:
-        if isinstance(value, str):
-            if not value.strip():
-                raise ValueError("path must not be empty")
-            return Path(value)
-        if isinstance(value, Path):
-            if not str(value).strip():
-                raise ValueError("path must not be empty")
-            return value
-        raise ValueError("path must be a str or pathlib.Path")
+__all__ = [
+    "AdvantageLossInput",
+    "Float32Tensor2D",
+    "ForwardBackwardBatch",
+    "Int64Tensor2D",
+    "OptimParams",
+    "OptimStepRequest",
+    "SampleParams",
+    "SampleRequest",
+    "StatePathInput",
+    "TrainerInitConfig",
+    "validate_loss_fn",
+]

@@ -1,12 +1,19 @@
-"""loraforge: Open-source low-level LoRA fine-tuning primitives."""
+"""loraforge: Open-source low-level LoRA fine-tuning primitives and client SDK."""
 
-from loraforge.schemas import (
-    ForwardBackwardBatch,
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from loraforge.wire import (
     OptimParams,
     SampleParams,
     TrainerInitConfig,
+    WireBatch,
 )
-from loraforge.trainer import LoraTrainer
+
+if TYPE_CHECKING:
+    from loraforge.schemas import ForwardBackwardBatch
+    from loraforge.trainer import LoraTrainer
 
 __all__ = [
     "ForwardBackwardBatch",
@@ -14,4 +21,17 @@ __all__ = [
     "OptimParams",
     "SampleParams",
     "TrainerInitConfig",
+    "WireBatch",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "LoraTrainer":
+        from loraforge.trainer import LoraTrainer
+
+        return LoraTrainer
+    if name == "ForwardBackwardBatch":
+        from loraforge.schemas import ForwardBackwardBatch
+
+        return ForwardBackwardBatch
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

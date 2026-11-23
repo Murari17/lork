@@ -587,9 +587,97 @@ def test_long_poll_returns_early_on_completion(tmp_path: Path) -> None:
         assert r_bad_wait.status_code == 422
 
 
+def test_session_capacity_limit_returns_429(tmp_path: Path) -> None:
+    """Session creation beyond ServerSettings.max_sessions (default 2) returns 429."""
+    default_settings = ServerSettings(
+        api_keys=(API_KEY,),
+        checkpoint_root=tmp_path / "checkpoints",
+    )
+    assert default_settings.max_sessions == 2
+
+    app = create_app(default_settings)
+    with TestClient(app) as client:
+        _create_session(client)
+        _create_session(client)
+
+        over_cap = client.post(
+            "/v1/sessions",
+            json={
+                "base_model": MODEL_NAME,
+                "rank": 4,
+                "alpha": 8.0,
+                "target_modules": TARGET_MODULES,
+                "device": "cpu",
+            },
+            headers=AUTH_HEADERS,
+        )
+        assert over_cap.status_code == 429
+        body = over_cap.json()
+        assert body["error"]["code"] == "session_capacity_exceeded"
+        assert "message" in body["error"]
+
+
+def test_ttl_eviction_does_not_evict_busy_or_queued_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Idle TTL eviction must NOT evict a session with running or queued ops."""
+    batch = _make_wire_batch("Busy session TTL test.", batch_size=1, seq_len=6)
+    settings = _make_settings(tmp_path, session_idle_ttl_seconds=0.25)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        sid = _create_session(client)
+
+        def _slow_fb(
+            self: LoraTrainer,
+            batch: dict[str, Any] | Any,
+            loss_fn: str | torch.Tensor | list[list[float]] = "cross_entropy",
+        ) -> dict[str, Any]:
+            time.sleep(0.45)
+            return {"loss": 1.0, "logprobs": torch.zeros((1, 6))}
+
+        monkeypatch.setattr(LoraTrainer, "forward_backward", _slow_fb)
+
+        f1 = client.post(
+            f"/v1/sessions/{sid}/forward_backward",
+            json={"batch": batch, "loss_fn": "cross_entropy"},
+            headers=AUTH_HEADERS,
+        ).json()["future_id"]
+        f2 = client.post(
+            f"/v1/sessions/{sid}/forward_backward",
+            json={"batch": batch, "loss_fn": "cross_entropy"},
+            headers=AUTH_HEADERS,
+        ).json()["future_id"]
+
+        # Sleep past session_idle_ttl_seconds while f1 is running and f2 is queued.
+        time.sleep(0.35)
+        r_still_alive = client.post(
+            f"/v1/sessions/{sid}/forward_backward",
+            json={"batch": batch, "loss_fn": "cross_entropy"},
+            headers=AUTH_HEADERS,
+        )
+        assert r_still_alive.status_code == 202
+        f3 = r_still_alive.json()["future_id"]
+
+        assert _wait_future(client, f1)["status"] == "done"
+        assert _wait_future(client, f2)["status"] == "done"
+        assert _wait_future(client, f3)["status"] == "done"
+
+
 @pytest.mark.anyio
-async def test_event_loop_responsive_during_slow_op(tmp_path: Path) -> None:
+async def test_event_loop_responsive_during_slow_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """10. Event loop stays responsive (healthz answers) while a slow op runs."""
+    def _slow_forward_backward(
+        self: LoraTrainer,
+        batch: dict[str, Any] | Any,
+        loss_fn: str | torch.Tensor | list[list[float]] = "cross_entropy",
+    ) -> dict[str, Any]:
+        time.sleep(1.5)
+        return {"loss": 1.0, "logprobs": torch.zeros((4, 16))}
+
+    monkeypatch.setattr(LoraTrainer, "forward_backward", _slow_forward_backward)
     app = create_app(_make_settings(tmp_path))
     batch = _make_wire_batch("Slow op concurrency batch.", batch_size=4, seq_len=16)
 
@@ -617,16 +705,14 @@ async def test_event_loop_responsive_during_slow_op(tmp_path: Path) -> None:
             assert init_done.json()["status"] == "done"
             sid = init_done.json()["result"]["session_id"]
 
-            # Submit multiple back-to-back forward_backward ops to keep the worker thread busy.
-            fids: list[str] = []
-            for _ in range(3):
-                r = await client.post(
-                    f"/v1/sessions/{sid}/forward_backward",
-                    json={"batch": batch, "loss_fn": "cross_entropy"},
-                    headers=AUTH_HEADERS,
-                )
-                assert r.status_code == 202
-                fids.append(r.json()["future_id"])
+            # Submit a slow forward_backward op (1.5s sleep on the worker thread).
+            r = await client.post(
+                f"/v1/sessions/{sid}/forward_backward",
+                json={"batch": batch, "loss_fn": "cross_entropy"},
+                headers=AUTH_HEADERS,
+            )
+            assert r.status_code == 202
+            fid = r.json()["future_id"]
 
             # Immediately poll /v1/healthz while the worker thread is running.
             t0 = time.monotonic()
@@ -639,13 +725,17 @@ async def test_event_loop_responsive_during_slow_op(tmp_path: Path) -> None:
             for hr in health_resps:
                 assert hr.status_code == 200
                 assert hr.json() == {"status": "ok"}
-            assert health_elapsed < 1.0
+            assert health_elapsed < 0.5
 
-            # Drain the submitted futures before shutdown.
-            for fid in fids:
-                done = await client.get(
-                    f"/v1/futures/{fid}",
-                    params={"wait": 30.0},
-                    headers=AUTH_HEADERS,
-                )
-                assert done.json()["status"] == "done"
+            # Confirm the slow op is still pending when healthz finishes.
+            mid_status = await client.get(f"/v1/futures/{fid}", headers=AUTH_HEADERS)
+            assert mid_status.status_code == 200
+            assert mid_status.json()["status"] == "pending"
+
+            # Drain the submitted future before shutdown.
+            done = await client.get(
+                f"/v1/futures/{fid}",
+                params={"wait": 30.0},
+                headers=AUTH_HEADERS,
+            )
+            assert done.json()["status"] == "done"

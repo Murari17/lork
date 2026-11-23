@@ -21,7 +21,7 @@ class ServerSettings(BaseModel):
     max_seq_len: int = Field(default=2048, gt=0)
     max_sample_tokens: int = Field(default=512, gt=0)
     max_prompts: int = Field(default=32, gt=0)
-    max_sessions: int = Field(default=8, gt=0)
+    max_sessions: int = Field(default=2, gt=0)
     session_idle_ttl_seconds: float = Field(default=1800.0, gt=0.0)
     max_futures: int = Field(default=1000, gt=0)
     future_ttl_seconds: float = Field(default=3600.0, gt=0.0)
@@ -51,7 +51,7 @@ class ServerSettings(BaseModel):
             max_seq_len=int(os.environ.get("LORAFORGE_MAX_SEQ_LEN", "2048")),
             max_sample_tokens=int(os.environ.get("LORAFORGE_MAX_SAMPLE_TOKENS", "512")),
             max_prompts=int(os.environ.get("LORAFORGE_MAX_PROMPTS", "32")),
-            max_sessions=int(os.environ.get("LORAFORGE_MAX_SESSIONS", "8")),
+            max_sessions=int(os.environ.get("LORAFORGE_MAX_SESSIONS", "2")),
             session_idle_ttl_seconds=float(
                 os.environ.get("LORAFORGE_SESSION_IDLE_TTL_SECONDS", "1800.0")
             ),

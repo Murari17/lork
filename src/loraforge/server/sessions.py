@@ -312,9 +312,10 @@ class SessionManager:
             worker.close()
         return len(to_close)
 
-    def shutdown(self) -> None:
+    def shutdown(self) -> int:
         with self._lock:
             workers = list(self._sessions.values())
             self._sessions.clear()
         for worker in workers:
             worker.close()
+        return len(workers)

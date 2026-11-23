@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import os
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
 import torch
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
 MODEL_NAME = "Qwen/Qwen2.5-0.5B"
@@ -54,6 +58,9 @@ def _wait_future(client: httpx.Client, future_id: str, headers: dict[str, str]) 
 
 
 def main() -> None:
+    # Avoid tqdm creating a multiprocessing SemLock in the client process.
+    tqdm.set_lock(threading.RLock())
+
     port = _find_free_port()
     base_url = f"http://127.0.0.1:{port}"
     headers = {"Authorization": f"Bearer {API_KEY}"}
@@ -74,94 +81,110 @@ def main() -> None:
     }
 
     with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        log_path = tmp_path / "uvicorn.log"
         env = os.environ.copy()
         env["LORAFORGE_API_KEYS"] = API_KEY
-        env["LORAFORGE_CHECKPOINT_ROOT"] = tmp_dir
+        env["LORAFORGE_CHECKPOINT_ROOT"] = str(tmp_path / "checkpoints")
         env["LORAFORGE_DEVICE"] = "cpu"
 
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "loraforge.server.app:create_app",
-                "--factory",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(port),
-                "--log-level",
-                "warning",
-            ],
-            env=env,
-            text=True,
-        )
-        try:
-            with httpx.Client(base_url=base_url, timeout=60.0) as client:
-                _wait_for_health(client, proc)
+        with log_path.open("w", encoding="utf-8") as log_file:
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "loraforge.server.app:create_app",
+                    "--factory",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--log-level",
+                    "info",
+                ],
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            try:
+                with httpx.Client(base_url=base_url, timeout=60.0) as client:
+                    _wait_for_health(client, proc)
 
-                create_resp = client.post(
-                    "/v1/sessions",
-                    json={
-                        "base_model": MODEL_NAME,
-                        "rank": 8,
-                        "alpha": 16.0,
-                        "target_modules": ["q_proj", "v_proj"],
-                        "device": "cpu",
-                    },
-                    headers=headers,
-                )
-                create_resp.raise_for_status()
-                init_res = _wait_future(client, create_resp.json()["future_id"], headers)
-                session_id = init_res["session_id"]
-                print(f"Session created: {session_id}")
-
-                losses: list[float] = []
-                for step in range(20):
-                    fb_resp = client.post(
-                        f"/v1/sessions/{session_id}/forward_backward",
-                        json={"batch": batch, "loss_fn": "cross_entropy"},
-                        headers=headers,
-                    )
-                    fb_resp.raise_for_status()
-                    fb_res = _wait_future(client, fb_resp.json()["future_id"], headers)
-                    loss = float(fb_res["loss"])
-                    losses.append(loss)
-
-                    opt_resp = client.post(
-                        f"/v1/sessions/{session_id}/optim_step",
+                    create_resp = client.post(
+                        "/v1/sessions",
                         json={
-                            "step_id": f"smoke-step-{step}",
-                            "optim_params": {
-                                "lr": 5e-4,
-                                "betas": [0.9, 0.999],
-                                "weight_decay": 0.0,
-                                "eps": 1e-8,
-                            },
+                            "base_model": MODEL_NAME,
+                            "rank": 8,
+                            "alpha": 16.0,
+                            "target_modules": ["q_proj", "v_proj"],
+                            "device": "cpu",
                         },
                         headers=headers,
                     )
-                    opt_resp.raise_for_status()
-                    opt_res = _wait_future(client, opt_resp.json()["future_id"], headers)
-                    print(f"step={opt_res['step']:02d} loss={loss:.6f}")
+                    create_resp.raise_for_status()
+                    init_res = _wait_future(client, create_resp.json()["future_id"], headers)
+                    session_id = init_res["session_id"]
+                    print(f"Session created: {session_id}")
 
-                assert losses[-1] < losses[0], (
-                    f"Expected loss to decrease: start={losses[0]:.6f}, end={losses[-1]:.6f}"
-                )
-                print(
-                    f"Smoke test passed: initial_loss={losses[0]:.6f} "
-                    f"final_loss={losses[-1]:.6f}"
-                )
+                    losses: list[float] = []
+                    for step in range(20):
+                        fb_resp = client.post(
+                            f"/v1/sessions/{session_id}/forward_backward",
+                            json={"batch": batch, "loss_fn": "cross_entropy"},
+                            headers=headers,
+                        )
+                        fb_resp.raise_for_status()
+                        fb_res = _wait_future(client, fb_resp.json()["future_id"], headers)
+                        loss = float(fb_res["loss"])
+                        losses.append(loss)
 
-                del_resp = client.delete(f"/v1/sessions/{session_id}", headers=headers)
-                del_resp.raise_for_status()
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5.0)
+                        opt_resp = client.post(
+                            f"/v1/sessions/{session_id}/optim_step",
+                            json={
+                                "step_id": f"smoke-step-{step}",
+                                "optim_params": {
+                                    "lr": 5e-4,
+                                    "betas": [0.9, 0.999],
+                                    "weight_decay": 0.0,
+                                    "eps": 1e-8,
+                                },
+                            },
+                            headers=headers,
+                        )
+                        opt_resp.raise_for_status()
+                        opt_res = _wait_future(client, opt_resp.json()["future_id"], headers)
+                        print(f"step={opt_res['step']:02d} loss={loss:.6f}")
+
+                    assert losses[-1] < losses[0], (
+                        f"Expected loss to decrease: start={losses[0]:.6f}, end={losses[-1]:.6f}"
+                    )
+                    print(
+                        f"Smoke test passed: initial_loss={losses[0]:.6f} "
+                        f"final_loss={losses[-1]:.6f}"
+                    )
+
+                    del_resp = client.delete(f"/v1/sessions/{session_id}", headers=headers)
+                    del_resp.raise_for_status()
+            finally:
+                if proc.poll() is None:
+                    proc.send_signal(signal.SIGINT)
+                    try:
+                        proc.wait(timeout=15.0)
+                    except subprocess.TimeoutExpired:
+                        proc.terminate()
+                        proc.wait(timeout=5.0)
+
+        server_logs = log_path.read_text(encoding="utf-8")
+        drain_lines = [
+            line for line in server_logs.splitlines() if "server_shutdown_drained" in line
+        ]
+        assert drain_lines, f"Expected server_shutdown_drained in logs:\n{server_logs}"
+        assert "leaked semaphore" not in server_logs, (
+            f"Unexpected semaphore leak warning:\n{server_logs}"
+        )
+        print(f"Graceful shutdown verified (exit={proc.returncode}): {drain_lines[-1]}")
 
 
 if __name__ == "__main__":

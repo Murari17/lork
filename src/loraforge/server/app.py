@@ -7,6 +7,7 @@ import contextlib
 import hmac
 import json
 import logging
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -15,6 +16,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Header, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from tqdm import tqdm
 
 from loraforge.server.futures import FutureStore
 from loraforge.server.models import (
@@ -68,6 +70,18 @@ def _verify_bearer_token(
 
 def create_app(settings: ServerSettings | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
+    # Uvicorn invokes this factory directly (no separate server CLI entrypoint), and tqdm
+    # stores its default write lock globally on TqdmDefaultWriteLock.mp_lock. Replacing it
+    # here with a process-local threading.RLock prevents transformers weight-loading bars
+    # from creating a multiprocessing POSIX semaphore that leaks on shutdown.
+    tqdm.set_lock(threading.RLock())
+    if not logger.handlers and not logging.getLogger().handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
     cfg = settings if settings is not None else ServerSettings.from_env()
     future_store = FutureStore(
         max_futures=cfg.max_futures,
@@ -95,7 +109,15 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
             evictor.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await evictor
-            await asyncio.to_thread(session_manager.shutdown)
+            drained = await asyncio.to_thread(session_manager.shutdown)
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "server_shutdown_drained",
+                        "drained_sessions": drained,
+                    }
+                )
+            )
 
     app = FastAPI(title="loraforge", version="0.1.0", lifespan=lifespan)
 

@@ -1,4 +1,4 @@
-"""Toy GRPO policy-gradient task using loraforge sample + advantage loss_fn."""
+"""Toy GRPO policy-gradient task using dado sample + advantage loss_fn."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ import sys
 
 from transformers import AutoTokenizer
 
-from loraforge.client import OptimParams, SampleParams, ServiceClient, TrainingClient
+from dado.client import OptimParams, SampleParams, ServiceClient, TrainingClient
 
 MODEL = "Qwen/Qwen2.5-0.5B"
-BASE_URL = os.environ.get("LORAFORGE_BASE_URL", "http://127.0.0.1:8000")
-API_KEY = os.environ.get("LORAFORGE_API_KEY", "dev-secret-key")
+BASE_URL = os.environ.get("DADO_BASE_URL", "http://127.0.0.1:8000")
+API_KEY = os.environ.get("DADO_API_KEY", "dev-secret-key")
 
 PROMPT = "Reply with only one word (apple or banana):"
 TARGET_WORD = "banana"
@@ -128,7 +128,7 @@ def run_grpo(base_seed: int = 42) -> dict[str, object]:
 
 
 def main() -> None:
-    seed_str = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("LORAFORGE_GRPO_SEED", "42")
+    seed_str = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DADO_GRPO_SEED", "42")
     run_grpo(base_seed=int(seed_str))
 
 

@@ -1,4 +1,4 @@
-"""Pydantic v2 tensor and trainer validation schemas for loraforge."""
+"""Pydantic v2 tensor and trainer validation schemas for dado."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from loraforge.wire import (
+from dado.wire import (
     OptimParams,
     OptimStepRequest,
     SampleParams,

@@ -1,4 +1,4 @@
-"""CUDA/bfloat16 GPU verification script for loraforge (run on Colab/Modal with a GPU)."""
+"""CUDA/bfloat16 GPU verification script for dado (run on Colab/Modal with a GPU)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 from transformers import AutoTokenizer
 
-from loraforge.trainer import LoraTrainer
+from dado.trainer import LoraTrainer
 
 MODEL_NAME = "Qwen/Qwen2.5-0.5B"
 TARGET_MODULES = ["q_proj", "v_proj"]

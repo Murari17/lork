@@ -6,11 +6,11 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from loraforge.client.exceptions import LoraforgeTimeoutError, RemoteOpError
+from dado.client.exceptions import DadoTimeoutError, RemoteOpError
 
 if TYPE_CHECKING:
-    from loraforge.client.client import ServiceClient
-    from loraforge.wire import FutureStatusResponse
+    from dado.client.client import ServiceClient
+    from dado.wire import FutureStatusResponse
 
 T = TypeVar("T")
 
@@ -57,7 +57,7 @@ class APIFuture(Generic[T]):
         timeout: float | None = None,
         poll_wait: float = 25.0,
     ) -> T:
-        """Long-poll until the operation finishes, or raise LoraforgeTimeoutError."""
+        """Long-poll until the operation finishes, or raise DadoTimeoutError."""
         if self._done:
             if self._error is not None:
                 raise self._error
@@ -69,7 +69,7 @@ class APIFuture(Generic[T]):
             if deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0.0:
-                    raise LoraforgeTimeoutError(
+                    raise DadoTimeoutError(
                         f"Timed out waiting for future {self.future_id}"
                     )
                 wait_seconds = max(0.0, min(poll_wait, 30.0, remaining))

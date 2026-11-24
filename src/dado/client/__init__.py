@@ -1,18 +1,18 @@
-"""Lightweight synchronous Python SDK for loraforge."""
+"""Lightweight synchronous Python SDK for dado."""
 
-from loraforge.client.client import ServiceClient, TrainingClient, validate_batch
-from loraforge.client.exceptions import (
+from dado.client.client import ServiceClient, TrainingClient, validate_batch
+from dado.client.exceptions import (
     AmbiguousSubmissionError,
     AuthError,
-    LoraforgeError,
-    LoraforgeTimeoutError,
+    DadoError,
+    DadoTimeoutError,
     RemoteOpError,
     ServerBusyError,
     SessionNotFoundError,
     ValidationError,
 )
-from loraforge.client.futures import APIFuture
-from loraforge.wire import (
+from dado.client.futures import APIFuture
+from dado.wire import (
     ForwardBackwardResult,
     OptimParams,
     OptimStepResult,
@@ -27,8 +27,8 @@ __all__ = [
     "AmbiguousSubmissionError",
     "AuthError",
     "ForwardBackwardResult",
-    "LoraforgeError",
-    "LoraforgeTimeoutError",
+    "DadoError",
+    "DadoTimeoutError",
     "OptimParams",
     "OptimStepResult",
     "RemoteOpError",

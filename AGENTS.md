@@ -1,4 +1,4 @@
-# loraforge: agent rules
+# Dado: agent rules
 
 PROJECT: Open-source LoRA fine-tuning service. Low-level primitives; the
 USER owns the training loop, data, and loss. Server owns execution only.

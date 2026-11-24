@@ -15,9 +15,9 @@ from fastapi.testclient import TestClient
 from tests.conftest import MODEL_NAME, TARGET_MODULES
 from transformers import AutoTokenizer
 
-from loraforge.server.app import create_app
-from loraforge.server.models import ServerSettings
-from loraforge.trainer import LoraTrainer
+from dado.server.app import create_app
+from dado.server.models import ServerSettings
+from dado.trainer import LoraTrainer
 
 API_KEY = "test-secret-api-key"
 AUTH_HEADERS = {"Authorization": f"Bearer {API_KEY}"}
@@ -751,15 +751,15 @@ async def test_event_loop_responsive_during_slow_op(
 
 
 def test_server_refuses_start_without_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ServerSettings.from_env and create_app refuse to start without LORAFORGE_API_KEYS."""
-    monkeypatch.delenv("LORAFORGE_API_KEYS", raising=False)
-    with pytest.raises(ValueError, match="LORAFORGE_API_KEYS"):
+    """ServerSettings.from_env and create_app refuse to start without DADO_API_KEYS."""
+    monkeypatch.delenv("DADO_API_KEYS", raising=False)
+    with pytest.raises(ValueError, match="DADO_API_KEYS"):
         ServerSettings.from_env()
-    with pytest.raises(ValueError, match="LORAFORGE_API_KEYS"):
+    with pytest.raises(ValueError, match="DADO_API_KEYS"):
         create_app()
 
-    monkeypatch.setenv("LORAFORGE_API_KEYS", "   ,  ")
-    with pytest.raises(ValueError, match="LORAFORGE_API_KEYS"):
+    monkeypatch.setenv("DADO_API_KEYS", "   ,  ")
+    with pytest.raises(ValueError, match="DADO_API_KEYS"):
         create_app()
 
 

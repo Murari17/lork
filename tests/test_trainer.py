@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from tests.conftest import TARGET_MODULES
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from loraforge.trainer import LoraTrainer
+from dado.trainer import LoraTrainer
 
 
 def _make_toy_batch(

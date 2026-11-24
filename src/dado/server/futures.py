@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any, Literal
 
-from loraforge.server.models import ErrorDetail, FutureStatusResponse
+from dado.server.models import ErrorDetail, FutureStatusResponse
 
 
 class FutureRecord:

@@ -20,7 +20,7 @@ from safetensors.torch import load_file as load_safetensors
 from safetensors.torch import save_file as save_safetensors
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 
-from loraforge.schemas import (
+from dado.schemas import (
     ForwardBackwardBatch,
     OptimParams,
     OptimStepRequest,

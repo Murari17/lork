@@ -1,4 +1,4 @@
-"""Phase 3 tests for the lightweight loraforge Python SDK (written before implementation)."""
+"""Phase 3 tests for the lightweight dado Python SDK (written before implementation)."""
 
 from __future__ import annotations
 
@@ -21,18 +21,18 @@ import torch
 from tests.conftest import MODEL_NAME, TARGET_MODULES
 from transformers import AutoTokenizer
 
-from loraforge.client import (
+from dado.client import (
     AmbiguousSubmissionError,
     AuthError,
-    LoraforgeTimeoutError,
+    DadoTimeoutError,
     RemoteOpError,
     ServerBusyError,
     ServiceClient,
     SessionNotFoundError,
     ValidationError,
 )
-from loraforge.trainer import LoraTrainer
-from loraforge.wire import OptimParams, SampleParams
+from dado.trainer import LoraTrainer
+from dado.wire import OptimParams, SampleParams
 
 API_KEY = "phase3-test-secret"
 
@@ -67,13 +67,13 @@ def _start_uvicorn(
     base_url = f"http://127.0.0.1:{port}"
     env = os.environ.copy()
     env["HF_HUB_OFFLINE"] = "1"
-    env["LORAFORGE_API_KEYS"] = API_KEY
-    env["LORAFORGE_CHECKPOINT_ROOT"] = str(tmp_path / "checkpoints")
-    env["LORAFORGE_DEVICE"] = "cpu"
-    env["LORAFORGE_MAX_SESSIONS"] = str(max_sessions)
-    env["LORAFORGE_MAX_BATCH_SIZE"] = "8"
-    env["LORAFORGE_MAX_SEQ_LEN"] = "64"
-    env["LORAFORGE_MAX_SAMPLE_TOKENS"] = "32"
+    env["DADO_API_KEYS"] = API_KEY
+    env["DADO_CHECKPOINT_ROOT"] = str(tmp_path / "checkpoints")
+    env["DADO_DEVICE"] = "cpu"
+    env["DADO_MAX_SESSIONS"] = str(max_sessions)
+    env["DADO_MAX_BATCH_SIZE"] = "8"
+    env["DADO_MAX_SEQ_LEN"] = "64"
+    env["DADO_MAX_SAMPLE_TOKENS"] = "32"
 
     log_path = tmp_path / "uvicorn.log"
     log_file = log_path.open("w", encoding="utf-8")
@@ -82,7 +82,7 @@ def _start_uvicorn(
             sys.executable,
             "-m",
             "uvicorn",
-            "loraforge.server.app:create_app",
+            "dado.server.app:create_app",
             "--factory",
             "--host",
             "127.0.0.1",
@@ -578,8 +578,8 @@ def test_server_error_codes_map_to_typed_exceptions(live_server: str) -> None:
 
 
 def test_future_result_timeout_does_not_cancel_op(live_server: str) -> None:
-    """6. future.result(timeout) raises LoraforgeTimeoutError; later result() succeeds."""
-    assert not issubclass(LoraforgeTimeoutError, TimeoutError)
+    """6. future.result(timeout) raises DadoTimeoutError; later result() succeeds."""
+    assert not issubclass(DadoTimeoutError, TimeoutError)
     client = ServiceClient(base_url=live_server, api_key=API_KEY)
     try:
         with client.create_training_client(
@@ -590,7 +590,7 @@ def test_future_result_timeout_does_not_cancel_op(live_server: str) -> None:
             device="cpu",
         ) as tc:
             fut = tc.sample(["Once upon a time"], SampleParams(max_tokens=16, temperature=0.0))
-            with pytest.raises(LoraforgeTimeoutError):
+            with pytest.raises(DadoTimeoutError):
                 fut.result(timeout=0.001)
             res = fut.result(timeout=60.0)
             assert fut.done() is True
@@ -626,16 +626,16 @@ def test_training_client_context_manager_deletes_session_on_exception(live_serve
 
 
 def test_no_torch_import_in_subprocess(live_server: str) -> None:
-    """8. Subprocess blocking torch/transformers/peft imports loraforge.client and runs."""
+    """8. Subprocess blocking torch/transformers/peft imports dado.client and runs."""
     script = """
 import sys
 for mod in ("torch", "transformers", "peft"):
     sys.modules[mod] = None  # type: ignore[assignment]
 
-import loraforge
-import loraforge.client
-from loraforge.client import ServiceClient
-from loraforge.wire import OptimParams
+import dado
+import dado.client
+from dado.client import ServiceClient
+from dado.wire import OptimParams
 
 assert "torch" not in sys.modules or sys.modules["torch"] is None
 assert "transformers" not in sys.modules or sys.modules["transformers"] is None
@@ -675,8 +675,8 @@ def test_examples_sft_runs_end_to_end(live_server: str) -> None:
     """9. examples/sft.py runs end to end against a live server."""
     env = os.environ.copy()
     env["HF_HUB_OFFLINE"] = "1"
-    env["LORAFORGE_BASE_URL"] = live_server
-    env["LORAFORGE_API_KEY"] = API_KEY
+    env["DADO_BASE_URL"] = live_server
+    env["DADO_API_KEY"] = API_KEY
 
     res = subprocess.run(
         [sys.executable, "examples/sft.py"],
@@ -794,8 +794,8 @@ def test_examples_grpo_toy_improves_reward(live_server: str) -> None:
     """examples/grpo_toy.py improves mean reward over baseline on fixed seed."""
     env = os.environ.copy()
     env["HF_HUB_OFFLINE"] = "1"
-    env["LORAFORGE_BASE_URL"] = live_server
-    env["LORAFORGE_API_KEY"] = API_KEY
+    env["DADO_BASE_URL"] = live_server
+    env["DADO_API_KEY"] = API_KEY
 
     res = subprocess.run(
         [sys.executable, "examples/grpo_toy.py"],

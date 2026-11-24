@@ -1,4 +1,4 @@
-"""Pydantic v2 settings and HTTP request/response models for loraforge server."""
+"""Pydantic v2 settings and HTTP request/response models for dado server."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from loraforge.wire import (
+from dado.wire import (
     CreateSessionRequest,
     ErrorDetail,
     ErrorEnvelope,
@@ -53,32 +53,32 @@ class ServerSettings(BaseModel):
 
     @classmethod
     def from_env(cls) -> ServerSettings:
-        """Load ServerSettings from LORAFORGE_* environment variables."""
-        raw_keys = os.environ.get("LORAFORGE_API_KEYS", "")
+        """Load ServerSettings from DADO_* environment variables."""
+        raw_keys = os.environ.get("DADO_API_KEYS", "")
         keys = tuple(part.strip() for part in raw_keys.split(",") if part.strip())
         if not keys:
             raise ValueError(
-                "LORAFORGE_API_KEYS environment variable must specify at least one API key"
+                "DADO_API_KEYS environment variable must specify at least one API key"
             )
         return cls(
             api_keys=keys,
-            max_batch_size=int(os.environ.get("LORAFORGE_MAX_BATCH_SIZE", "32")),
-            max_seq_len=int(os.environ.get("LORAFORGE_MAX_SEQ_LEN", "2048")),
-            max_sample_tokens=int(os.environ.get("LORAFORGE_MAX_SAMPLE_TOKENS", "512")),
-            max_prompts=int(os.environ.get("LORAFORGE_MAX_PROMPTS", "32")),
-            max_sessions=int(os.environ.get("LORAFORGE_MAX_SESSIONS", "2")),
+            max_batch_size=int(os.environ.get("DADO_MAX_BATCH_SIZE", "32")),
+            max_seq_len=int(os.environ.get("DADO_MAX_SEQ_LEN", "2048")),
+            max_sample_tokens=int(os.environ.get("DADO_MAX_SAMPLE_TOKENS", "512")),
+            max_prompts=int(os.environ.get("DADO_MAX_PROMPTS", "32")),
+            max_sessions=int(os.environ.get("DADO_MAX_SESSIONS", "2")),
             session_idle_ttl_seconds=float(
-                os.environ.get("LORAFORGE_SESSION_IDLE_TTL_SECONDS", "1800.0")
+                os.environ.get("DADO_SESSION_IDLE_TTL_SECONDS", "1800.0")
             ),
-            max_futures=int(os.environ.get("LORAFORGE_MAX_FUTURES", "1000")),
+            max_futures=int(os.environ.get("DADO_MAX_FUTURES", "1000")),
             future_ttl_seconds=float(
-                os.environ.get("LORAFORGE_FUTURE_TTL_SECONDS", "3600.0")
+                os.environ.get("DADO_FUTURE_TTL_SECONDS", "3600.0")
             ),
-            checkpoint_root=Path(os.environ.get("LORAFORGE_CHECKPOINT_ROOT", "checkpoints")),
-            default_device=os.environ.get("LORAFORGE_DEVICE", "cpu"),
-            host=os.environ.get("LORAFORGE_HOST", "127.0.0.1"),
+            checkpoint_root=Path(os.environ.get("DADO_CHECKPOINT_ROOT", "checkpoints")),
+            default_device=os.environ.get("DADO_DEVICE", "cpu"),
+            host=os.environ.get("DADO_HOST", "127.0.0.1"),
             max_request_body_bytes=int(
-                os.environ.get("LORAFORGE_MAX_REQUEST_BODY_BYTES", str(10 * 1024 * 1024))
+                os.environ.get("DADO_MAX_REQUEST_BODY_BYTES", str(10 * 1024 * 1024))
             ),
         )
 

@@ -1,14 +1,14 @@
 services:
-  loraforge:
+  dado:
     build: .
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      LORAFORGE_API_KEYS: "${LORAFORGE_API_KEYS:?LORAFORGE_API_KEYS must be set}"
-      LORAFORGE_DEVICE: "${LORAFORGE_DEVICE:-cuda}"
-      LORAFORGE_MAX_SESSIONS: "${LORAFORGE_MAX_SESSIONS:-2}"
-      LORAFORGE_SESSION_IDLE_TTL_SECONDS: "${LORAFORGE_SESSION_IDLE_TTL_SECONDS:-1800}"
-      LORAFORGE_CHECKPOINT_ROOT: "/data/checkpoints"
+      DADO_API_KEYS: "${DADO_API_KEYS:?DADO_API_KEYS must be set}"
+      DADO_DEVICE: "${DADO_DEVICE:-cuda}"
+      DADO_MAX_SESSIONS: "${DADO_MAX_SESSIONS:-2}"
+      DADO_SESSION_IDLE_TTL_SECONDS: "${DADO_SESSION_IDLE_TTL_SECONDS:-1800}"
+      DADO_CHECKPOINT_ROOT: "/data/checkpoints"
       HF_HOME: "/cache/huggingface"
     volumes:
       - hf_cache:/cache/huggingface

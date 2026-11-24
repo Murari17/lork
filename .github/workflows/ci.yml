@@ -34,9 +34,9 @@ jobs:
           import sys
           for m in ('torch', 'transformers', 'peft'):
               sys.modules[m] = None
-          import loraforge
-          import loraforge.client
-          from loraforge.wire import OptimParams, SampleParams, WireBatch
+          import dado
+          import dado.client
+          from dado.wire import OptimParams, SampleParams, WireBatch
           b = WireBatch(input_ids=[[1, 2]], target_ids=[[2, 3]], weights=[[1.0, 1.0]])
           assert b.shape == (1, 2)
           assert OptimParams(lr=1e-3).eps == 1e-8
@@ -80,7 +80,7 @@ jobs:
         run: |
           python -m venv /tmp/v_client
           /tmp/v_client/bin/pip install dist/*.whl
-          /tmp/v_client/bin/python -c "import loraforge.client, sys; assert 'torch' not in sys.modules; print('client wheel ok')"
+          /tmp/v_client/bin/python -c "import dado.client, sys; assert 'torch' not in sys.modules; print('client wheel ok')"
           python -m venv /tmp/v_server
           /tmp/v_server/bin/pip install "dist/$(ls dist/*.whl | xargs -n1 basename)[server]"
-          /tmp/v_server/bin/python -c "import loraforge.server; print('server wheel ok')"
+          /tmp/v_server/bin/python -c "import dado.server; print('server wheel ok')"

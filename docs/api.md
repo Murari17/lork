@@ -1,6 +1,6 @@
 # HTTP API Reference (`/v1`)
 
-All endpoints except `GET /v1/healthz` require `Authorization: Bearer <api_key>` matching `LORAFORGE_API_KEYS`. Errors return `{"error": {"code": "<code >", "message": "<message>"}}`.
+All endpoints except `GET /v1/healthz` require `Authorization: Bearer <api_key>` matching `DADO_API_KEYS`. Errors return `{"error": {"code": "<code >", "message": "<message>"}}`.
 
 ---
 
@@ -62,7 +62,7 @@ Response (`200`):
 
 ## `POST /v1/sessions/{session_id}/forward_backward`
 
-Runs forward and backward pass on a `(B, T)` batch, accumulating gradients without stepping weights. Rejects batches exceeding `LORAFORGE_MAX_BATCH_SIZE` / `LORAFORGE_MAX_SEQ_LEN` with `422`.
+Runs forward and backward pass on a `(B, T)` batch, accumulating gradients without stepping weights. Rejects batches exceeding `DADO_MAX_BATCH_SIZE` / `DADO_MAX_SEQ_LEN` with `422`.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/v1/sessions/sess_.../forward_backward \

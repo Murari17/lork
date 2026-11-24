@@ -1,4 +1,4 @@
-"""Synchronous Python SDK for loraforge with safe retries and zero heavy ML imports."""
+"""Synchronous Python SDK for dado with safe retries and zero heavy ML imports."""
 
 from __future__ import annotations
 
@@ -11,16 +11,16 @@ from typing import Any, Literal
 import httpx
 from pydantic import ValidationError as PydanticValidationError
 
-from loraforge.client.exceptions import (
+from dado.client.exceptions import (
     AmbiguousSubmissionError,
     AuthError,
-    LoraforgeError,
+    DadoError,
     ServerBusyError,
     SessionNotFoundError,
     ValidationError,
 )
-from loraforge.client.futures import APIFuture
-from loraforge.wire import (
+from dado.client.futures import APIFuture
+from dado.wire import (
     CreateSessionRequest,
     ErrorEnvelope,
     ForwardBackwardResult,
@@ -39,7 +39,7 @@ from loraforge.wire import (
     WireBatch,
 )
 
-logger = logging.getLogger("loraforge.client")
+logger = logging.getLogger("dado.client")
 
 _PRE_SEND_EXCEPTIONS = (
     httpx.ConnectError,
@@ -221,7 +221,7 @@ class TrainingClient:
 
 
 class ServiceClient:
-    """Top-level HTTP client for connecting to a loraforge server."""
+    """Top-level HTTP client for connecting to a dado server."""
 
     def __init__(
         self,
@@ -339,7 +339,7 @@ class ServiceClient:
             raise SessionNotFoundError(f"{code}: {message}")
         if status_code in (429, 503):
             raise ServerBusyError(f"{code}: {message}")
-        raise LoraforgeError(f"HTTP {status_code} ({code}): {message}")
+        raise DadoError(f"HTTP {status_code} ({code}): {message}")
 
     def _request(
         self,
@@ -365,7 +365,7 @@ class ServiceClient:
                 if attempt < self._max_retries:
                     self._sleep_for_retry(attempt)
                     continue
-                raise LoraforgeError(f"Connection failed for {method} {path}: {exc}") from exc
+                raise DadoError(f"Connection failed for {method} {path}: {exc}") from exc
             except httpx.HTTPError as exc:
                 logger.debug("transport_error method=%s path=%s attempt=%d", method, path, attempt)
                 if not idempotent:
@@ -376,7 +376,7 @@ class ServiceClient:
                 if attempt < self._max_retries:
                     self._sleep_for_retry(attempt)
                     continue
-                raise LoraforgeError(
+                raise DadoError(
                     f"Request failed after retries for {method} {path}: {exc}"
                 ) from exc
 
@@ -396,7 +396,7 @@ class ServiceClient:
                 if not can_retry_status:
                     raise AmbiguousSubmissionError(
                         f"Ambiguous HTTP {status_code} on non-idempotent {method} {path}",
-                        cause=LoraforgeError(f"HTTP {status_code}: {response.text}"),
+                        cause=DadoError(f"HTTP {status_code}: {response.text}"),
                     )
                 if attempt < self._max_retries:
                     retry_after = _parse_retry_after(response.headers.get("Retry-After"))
@@ -410,4 +410,4 @@ class ServiceClient:
             payload: dict[str, Any] = response.json()
             return payload
 
-        raise LoraforgeError(f"Exhausted retries for {method} {path}")
+        raise DadoError(f"Exhausted retries for {method} {path}")

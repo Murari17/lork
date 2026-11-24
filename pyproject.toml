@@ -3,13 +3,13 @@ requires = ["setuptools==84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "loraforge"
+name = "dado"
 version = "0.1.0"
 description = "Open-source LoRA fine-tuning service with low-level async execution primitives."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
-authors = [{ name = "loraforge contributors" }]
+authors = [{ name = "Dado contributors" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -35,9 +35,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/loraforge/loraforge"
-Repository = "https://github.com/loraforge/loraforge"
-Documentation = "https://github.com/loraforge/loraforge/tree/main/docs"
+Homepage = "https://github.com/dado/dado"
+Repository = "https://github.com/dado/dado"
+Documentation = "https://github.com/dado/dado/tree/main/docs"
 
 [project.optional-dependencies]
 server = [
@@ -105,8 +105,8 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-loraforge = ["py.typed"]
-"loraforge.client" = ["py.typed"]
+dado = ["py.typed"]
+"dado.client" = ["py.typed"]
 
 [tool.ruff]
 target-version = "py311"
@@ -120,7 +120,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.11"
 strict = true
 mypy_path = "src"
-packages = ["loraforge"]
+packages = ["dado"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

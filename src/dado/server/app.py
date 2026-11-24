@@ -1,4 +1,4 @@
-"""FastAPI application factory and /v1 endpoints for loraforge."""
+"""FastAPI application factory and /v1 endpoints for dado."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from fastapi.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from tqdm import tqdm
 
-from loraforge.server.futures import FutureStore
-from loraforge.server.models import (
+from dado.server.futures import FutureStore
+from dado.server.models import (
     CreateSessionRequest,
     ErrorDetail,
     ErrorEnvelope,
@@ -32,14 +32,14 @@ from loraforge.server.models import (
     ServerSettings,
     StateHttpRequest,
 )
-from loraforge.server.sessions import (
+from dado.server.sessions import (
     InvalidCheckpointPathError,
     SessionCapacityError,
     SessionManager,
     SessionNotFoundError,
 )
 
-logger = logging.getLogger("loraforge.server")
+logger = logging.getLogger("dado.server")
 
 
 class UnauthorizedError(Exception):
@@ -184,7 +184,7 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
                 )
             )
 
-    app = FastAPI(title="loraforge", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Dado", version="0.1.0", lifespan=lifespan)
     app.add_middleware(_BodySizeLimitMiddleware, max_bytes=cfg.max_request_body_bytes)
 
     @app.middleware("http")

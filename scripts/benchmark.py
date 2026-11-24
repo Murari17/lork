@@ -1,4 +1,4 @@
-"""Benchmark loraforge SDK-over-HTTP vs plain PEFT+AdamW SFT loop."""
+"""Benchmark dado SDK-over-HTTP vs plain PEFT+AdamW SFT loop."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import torch.nn.functional as F
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from loraforge.client import OptimParams, ServiceClient
+from dado.client import OptimParams, ServiceClient
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -119,16 +119,16 @@ def _run_http_sdk(batch: dict[str, Any], *, return_logprobs: bool) -> dict[str, 
     with tempfile.TemporaryDirectory() as tmp_dir:
         env = os.environ.copy()
         env["HF_HUB_OFFLINE"] = "1"
-        env["LORAFORGE_API_KEYS"] = API_KEY
-        env["LORAFORGE_CHECKPOINT_ROOT"] = tmp_dir
-        env["LORAFORGE_DEVICE"] = "cpu"
+        env["DADO_API_KEYS"] = API_KEY
+        env["DADO_CHECKPOINT_ROOT"] = tmp_dir
+        env["DADO_DEVICE"] = "cpu"
         proc = subprocess.Popen(
             [
                 sys.executable,
                 "-c",
                 (
                     "import torch, uvicorn; torch.manual_seed(42); "
-                    f"uvicorn.run('loraforge.server.app:create_app', factory=True, "
+                    f"uvicorn.run('dado.server.app:create_app', factory=True, "
                     f"host='127.0.0.1', port={port}, log_level='warning')"
                 ),
             ],
@@ -282,14 +282,14 @@ def main() -> None:
     ax.plot(
         steps,
         http_lp["losses"],
-        label="loraforge SDK (return_logprobs=True)",
+        label="Dado SDK (return_logprobs=True)",
         linewidth=1.8,
         linestyle="--",
         marker="x",
     )
     ax.set_xlabel("Step")
     ax.set_ylabel("Cross-Entropy Loss")
-    ax.set_title(f"loraforge HTTP vs Plain PEFT+AdamW ({MODEL_NAME}, CPU fp32)")
+    ax.set_title(f"Dado HTTP vs Plain PEFT+AdamW ({MODEL_NAME}, CPU fp32)")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()

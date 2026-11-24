@@ -84,9 +84,9 @@ def main() -> None:
         tmp_path = Path(tmp_dir)
         log_path = tmp_path / "uvicorn.log"
         env = os.environ.copy()
-        env["LORAFORGE_API_KEYS"] = API_KEY
-        env["LORAFORGE_CHECKPOINT_ROOT"] = str(tmp_path / "checkpoints")
-        env["LORAFORGE_DEVICE"] = "cpu"
+        env["DADO_API_KEYS"] = API_KEY
+        env["DADO_CHECKPOINT_ROOT"] = str(tmp_path / "checkpoints")
+        env["DADO_DEVICE"] = "cpu"
 
         with log_path.open("w", encoding="utf-8") as log_file:
             proc = subprocess.Popen(
@@ -94,7 +94,7 @@ def main() -> None:
                     sys.executable,
                     "-m",
                     "uvicorn",
-                    "loraforge.server.app:create_app",
+                    "dado.server.app:create_app",
                     "--factory",
                     "--host",
                     "127.0.0.1",

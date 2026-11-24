@@ -1,15 +1,15 @@
-# loraforge Architecture
+# Dado Architecture
 
 ## Overview
 
-`loraforge` is an open-source LoRA fine-tuning execution engine built around low-level training primitives. The caller owns the training loop, dataset construction, and loss shaping; `loraforge` owns model execution, gradient accumulation, optimizer stepping, sampling, and state persistence.
+`dado` is an open-source LoRA fine-tuning execution engine built around low-level training primitives. The caller owns the training loop, dataset construction, and loss shaping; `dado` owns model execution, gradient accumulation, optimizer stepping, sampling, and state persistence.
 
 ---
 
 ## Package Structure
 
 ```text
-loraforge/
+dado/
 ├── pyproject.toml                   # Split client deps vs [server] & [dev] extras, release metadata
 ├── LICENSE                          # Apache-2.0
 ├── CHANGELOG.md                     # Release history
@@ -32,7 +32,7 @@ loraforge/
 │   ├── smoke_http.py                # Real-uvicorn 20-step HTTP SFT smoke script
 │   ├── gpu_check.py                 # CUDA bf16 verification script
 │   └── benchmark.py                 # Live HTTP vs plain PEFT+AdamW benchmark
-├── src/loraforge/
+├── src/dado/
 │   ├── __init__.py                  # Eager wire exports; lazy __getattr__ for LoraTrainer
 │   ├── py.typed                     # PEP 561 type marker
 │   ├── wire.py                      # Pure-Pydantic wire schemas (no torch/transformers/peft)
@@ -61,8 +61,8 @@ loraforge/
 
 ## Phase 1: `LoraTrainer` Core
 
-- **Input Validation (`src/loraforge/schemas.py` & `src/loraforge/wire.py`)**: Pure-Pydantic configuration and wire schemas live in `wire.py` with zero heavy ML imports. `schemas.py` validates `torch.Tensor` batches and precomputed advantage tensors.
-- **Execution (`src/loraforge/trainer.py`)**:
+- **Input Validation (`src/dado/schemas.py` & `src/dado/wire.py`)**: Pure-Pydantic configuration and wire schemas live in `wire.py` with zero heavy ML imports. `schemas.py` validates `torch.Tensor` batches and precomputed advantage tensors.
+- **Execution (`src/dado/trainer.py`)**:
   - Loads causal LM in the resolved `dtype`, freezes base weights, injects LoRA adapters (`autocast_adapter_dtype=True`), and keeps trainable LoRA parameters and `AdamW` optimizer state in `torch.float32`.
   - Computes per-token log-probabilities and loss in `torch.float32`, backpropagates unnormalized weighted token losses, and divides accumulated gradients by total accumulated window weight at `optim_step`.
   - Tracks `_applied_steps` for idempotent `optim_step`, supports KV-cached `sample()` with optional per-call `torch.Generator` seeding (`SampleParams.seed`), and persists/restores weights + `AdamW` state via `save_state()` / `load_state()`.
@@ -79,7 +79,7 @@ loraforge/
 
 ## Phase 3: Lightweight Python SDK & Packaging Split
 
-- **Zero-ML Client Packaging**: `pip install loraforge` installs only `httpx`, `pydantic`, and lightweight transitive deps. `import loraforge` and `import loraforge.client` never import `torch`, `transformers`, or `peft`.
+- **Zero-ML Client Packaging**: `pip install dado` installs only `httpx`, `pydantic`, and lightweight transitive deps. `import dado` and `import dado.client` never import `torch`, `transformers`, or `peft`.
 - **Correctness-Critical Retry Semantics**: `optim_step` (reusing identical `step_id`), `GET /v1/futures/{id}`, and `DELETE` retry on pre-send errors, `429`, and `5xx`. Non-idempotent submissions (`forward_backward`, `sample`, `save_state`, `load_state`, `create_session`) retry **only** on pre-send transport failures, `429`, or `503` with our structured `ErrorEnvelope`; any other post-send failure (including `502`/`500`/`504`/drops) raises `AmbiguousSubmissionError` without retrying.
 
 ---
@@ -87,5 +87,5 @@ loraforge/
 ## Phase 4: Launch Hardening
 
 - **`dtype` & CUDA Mixed Precision**: `TrainerInitConfig` and `CreateSessionRequest` accept `dtype: Literal["float32", "bfloat16", "float16"] | None`. Defaults to `"bfloat16"` on CUDA devices supporting bf16 and `"float32"` on CPU/MPS; rejects `"float16"` on CPU. Base weights use the selected dtype while LoRA adapters, `AdamW` state, and loss computation remain `float32`.
-- **Server Safety Defaults**: Refuses startup without `LORAFORGE_API_KEYS` (no default key), defaults `host` to `127.0.0.1`, enables zero CORS headers, and enforces `max_request_body_bytes` (default `10 MiB`) in raw ASGI middleware `_BodySizeLimitMiddleware` on both `Content-Length` and chunked/streaming bodies before JSON parsing (`413`). `forward_backward` supports `return_logprobs: bool = True` to omit per-token logprobs when unused.
+- **Server Safety Defaults**: Refuses startup without `DADO_API_KEYS` (no default key), defaults `host` to `127.0.0.1`, enables zero CORS headers, and enforces `max_request_body_bytes` (default `10 MiB`) in raw ASGI middleware `_BodySizeLimitMiddleware` on both `Content-Length` and chunked/streaming bodies before JSON parsing (`413`). `forward_backward` supports `return_logprobs: bool = True` to omit per-token logprobs when unused.
 - **Release & Tooling**: `Apache-2.0` `LICENSE`, `CHANGELOG.md`, `dist/` wheel + sdist build, `scripts/gpu_check.py`, `scripts/benchmark.py`, `Dockerfile` + `docker-compose.yml`, `.github/workflows/ci.yml`, `docs/api.md`, `docs/retries.md`, `docs/benchmark.md`, and `examples/colab_quickstart.ipynb`.

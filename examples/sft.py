@@ -1,4 +1,4 @@
-"""Minimal ~30-line SFT example using the loraforge Python SDK."""
+"""Minimal ~30-line SFT example using the dado Python SDK."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ import os
 
 from transformers import AutoTokenizer
 
-from loraforge.client import OptimParams, ServiceClient
+from dado.client import OptimParams, ServiceClient
 
 MODEL = "Qwen/Qwen2.5-0.5B"
-BASE_URL = os.environ.get("LORAFORGE_BASE_URL", "http://127.0.0.1:8000")
-API_KEY = os.environ.get("LORAFORGE_API_KEY", "dev-secret-key")
+BASE_URL = os.environ.get("DADO_BASE_URL", "http://127.0.0.1:8000")
+API_KEY = os.environ.get("DADO_API_KEY", "dev-secret-key")
 
 
 def main() -> None:
     tok = AutoTokenizer.from_pretrained(MODEL)
-    ids = tok("loraforge lets you own your LoRA training loop cleanly.", return_tensors="pt")[
+    ids = tok("dado lets you own your LoRA training loop cleanly.", return_tensors="pt")[
         "input_ids"
     ][0].tolist()
     batch = {

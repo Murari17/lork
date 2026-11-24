@@ -2,6 +2,14 @@
 
 All notable changes to `lork` are documented in this file.
 
+## [0.2.0] - Phase 5 (Sampling Controls, Adapter Export, CLI & Packaging)
+
+### Added
+- `SampleParams.top_p` (nucleus filtering) and `SampleParams.stop` (up to 8 non-empty stop strings), plus `SampleResult.stop_reasons` (`"length"`, `"eos"`, `"stop"`).
+- Standalone PEFT LoRA adapter export (`LoraTrainer.export_adapter`, `POST /v1/sessions/{session_id}/export_adapter`, `TrainingClient.export_adapter`) with symlink-safe `exports/` path containment.
+- Zero-ML `lork` CLI (`src/lork/cli.py`, `[project.scripts]`): `lork --version` and `lork serve`.
+- Bounded compatible dependency ranges in `pyproject.toml`, `.github/workflows/publish.yml` for tag-based PyPI Trusted Publishing, and upgraded `examples/colab_quickstart.ipynb` sentiment JSON mini-project.
+
 ## [0.1.0] - Phase 4 (Launch Hardening)
 
 ### Added

@@ -6,7 +6,7 @@ The Python SDK (`lork.client.ServiceClient`) distinguishes operations that are s
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `optim_step` (reuses identical `step_id`) | Retries (exp. backoff + jitter) | Retries (honors `Retry-After`) | Retries (honors `Retry-After`) | Retries (exp. backoff + jitter) | Retries (exp. backoff + jitter) |
 | `GET /v1/futures/{id}`, `DELETE /v1/sessions/{id}` | Retries (exp. backoff + jitter) | Retries (honors `Retry-After`) | Retries (honors `Retry-After`) | Retries (exp. backoff + jitter) | Retries (exp. backoff + jitter) |
-| `forward_backward`, `sample`, `save_state`, `load_state`, `create_session` | Retries (exp. backoff + jitter) | Retries (honors `Retry-After`) | Retries (honors `Retry-After`) | Raises `AmbiguousSubmissionError` (NO retry) | Raises `AmbiguousSubmissionError` (NO retry) |
+| `forward_backward`, `sample`, `save_state`, `load_state`, `export_adapter`, `create_session` | Retries (exp. backoff + jitter) | Retries (honors `Retry-After`) | Retries (honors `Retry-After`) | Raises `AmbiguousSubmissionError` (NO retry) | Raises `AmbiguousSubmissionError` (NO retry) |
 
 ## Typed Exceptions
 

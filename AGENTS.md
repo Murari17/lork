@@ -10,12 +10,13 @@ API (all async/future-based):
 - optim_step(session_id, step_id, {lr, betas, weight_decay, eps}) -> {step}
     Applies + zeros grads. MUST be idempotent on step_id (replay returns
     the same result, never double-applies).
-- sample(session_id, prompts, {max_tokens, temperature}) -> completions + logprobs
+- sample(session_id, prompts, {max_tokens, temperature, top_p, stop, seed}) -> completions + logprobs + stop_reasons
 - save_state / load_state(session_id, name): LoRA weights + optimizer state
+- export_adapter(session_id, name): standalone PEFT adapter files (adapter_config.json + adapter_model.safetensors)
 - delete_session(session_id)
 
-STACK: Python 3.11, PyTorch, transformers, peft, FastAPI, Pydantic v2,
-pytest, ruff, mypy --strict. Pin all versions in pyproject.toml.
+STACK: Python 3.11+, PyTorch, transformers, peft, FastAPI, Pydantic v2,
+pytest, ruff, mypy --strict. Specify bounded compatible version ranges in pyproject.toml.
 
 HARD RULES
 1. Work in PHASES. Stop at the end of each phase and wait for approval.

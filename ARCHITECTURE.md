@@ -14,7 +14,9 @@ lork/
 ├── LICENSE                          # Apache-2.0
 ├── CHANGELOG.md                     # Release history
 ├── Dockerfile & docker-compose.yml  # CUDA 12.4 runtime container (unbuilt locally without Docker)
-├── .github/workflows/ci.yml         # CI: lint+type, fast no-torch tests, full CPU tests, wheel check
+├── .github/workflows/
+│   ├── ci.yml                       # CI: lint+type, fast no-torch tests, full CPU tests, wheel check
+│   └── publish.yml                  # Tag-triggered (v*) PyPI Trusted Publishing workflow
 ├── AGENTS.md                        # Project spec & hard rules 1-11
 ├── ARCHITECTURE.md                  # Architecture & phase documentation
 ├── README.md                        # Quickstart, benchmarks, examples, limits
@@ -33,7 +35,8 @@ lork/
 │   ├── gpu_check.py                 # CUDA bf16 verification script
 │   └── benchmark.py                 # Live HTTP vs plain PEFT+AdamW benchmark
 ├── src/lork/
-│   ├── __init__.py                  # Eager wire exports; lazy __getattr__ for LoraTrainer
+│   ├── __init__.py                  # Eager wire/version exports; lazy __getattr__ for LoraTrainer
+│   ├── cli.py                       # Zero-ML CLI (`lork --version`, `lork serve`)
 │   ├── py.typed                     # PEP 561 type marker
 │   ├── wire.py                      # Pure-Pydantic wire schemas (no torch/transformers/peft)
 │   ├── schemas.py                   # Torch-backed tensor validators + wire re-exports
@@ -89,3 +92,11 @@ lork/
 - **`dtype` & CUDA Mixed Precision**: `TrainerInitConfig` and `CreateSessionRequest` accept `dtype: Literal["float32", "bfloat16", "float16"] | None`. Defaults to `"bfloat16"` on CUDA devices supporting bf16 and `"float32"` on CPU/MPS; rejects `"float16"` on CPU. Base weights use the selected dtype while LoRA adapters, `AdamW` state, and loss computation remain `float32`.
 - **Server Safety Defaults**: Refuses startup without `LORK_API_KEYS` (no default key), defaults `host` to `127.0.0.1`, enables zero CORS headers, and enforces `max_request_body_bytes` (default `10 MiB`) in raw ASGI middleware `_BodySizeLimitMiddleware` on both `Content-Length` and chunked/streaming bodies before JSON parsing (`413`). `forward_backward` supports `return_logprobs: bool = True` to omit per-token logprobs when unused.
 - **Release & Tooling**: `Apache-2.0` `LICENSE`, `CHANGELOG.md`, `dist/` wheel + sdist build, `scripts/gpu_check.py`, `scripts/benchmark.py`, `Dockerfile` + `docker-compose.yml`, `.github/workflows/ci.yml`, `docs/api.md`, `docs/retries.md`, `docs/benchmark.md`, and `examples/colab_quickstart.ipynb`.
+
+---
+
+## Phase 5: Sampling Controls, PEFT Adapter Export, CLI & Packaging (`v0.2.0`)
+
+- **Sampling Controls (`wire.py`, `trainer.py`)**: `SampleParams` adds `top_p` nucleus filtering (`(0.0, 1.0]`) and up to 8 non-empty `stop` strings (`"\n"` allowed). `SampleResult` reports per-prompt `stop_reasons` (`"length" | "eos" | "stop"`) while preserving exact unscaled token log-probabilities.
+- **Standalone PEFT Export (`trainer.py`, `sessions.py`, `app.py`, `client.py`)**: `LoraTrainer.export_adapter()`, `POST /v1/sessions/{session_id}/export_adapter`, and `TrainingClient.export_adapter()` write `adapter_config.json` + `adapter_model.safetensors` under `<checkpoint_root>/<session_id>/exports/<name>` using shared symlink-free path containment (`_resolve_safe_subpath`), producing adapters directly loadable by `PeftModel.from_pretrained` and vLLM.
+- **Zero-ML CLI & Release Automation (`cli.py`, `pyproject.toml`, `.github/workflows/publish.yml`)**: `lork` script entrypoint runs `lork --version` and `lork serve` without importing ML packages at load time; `pyproject.toml` uses bounded compatible version ranges (`>=,<`) for smooth Colab/PyPI installs; tag pushes (`v*`) build and publish via PyPI Trusted Publishing.

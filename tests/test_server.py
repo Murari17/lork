@@ -836,3 +836,73 @@ def test_forward_backward_return_logprobs_false_omits_logprobs(tmp_path: Path) -
         assert "logprobs" not in done["result"]
         assert isinstance(done["result"]["loss"], float)
         assert done["result"]["loss"] > 0.0
+
+
+def test_export_adapter_endpoint_and_symlink_containment(tmp_path: Path) -> None:
+    """export_adapter writes PEFT files under exports/, rejects traversal and outside symlinks."""
+    ckpt_root = tmp_path / "ckpts"
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+    app = create_app(_make_settings(tmp_path, checkpoint_root=ckpt_root))
+
+    with TestClient(app) as client:
+        sid = _create_session(client)
+
+        r = client.post(
+            f"/v1/sessions/{sid}/export_adapter",
+            json={"name": "prod_v1"},
+            headers=AUTH_HEADERS,
+        )
+        assert r.status_code == 202
+        done = _wait_future(client, r.json()["future_id"])
+        assert done["status"] == "done"
+        assert done["result"]["name"] == "prod_v1"
+        assert "adapter_config.json" in done["result"]["files"]
+        assert "adapter_model.safetensors" in done["result"]["files"]
+        export_path = Path(done["result"]["path"])
+        assert export_path.is_relative_to(ckpt_root.resolve() / sid / "exports")
+        assert (export_path / "adapter_config.json").is_file()
+
+        r_trav = client.post(
+            f"/v1/sessions/{sid}/export_adapter",
+            json={"name": "../escape"},
+            headers=AUTH_HEADERS,
+        )
+        assert r_trav.status_code == 422
+
+        exports_dir = ckpt_root.resolve() / sid / "exports"
+        exports_dir.mkdir(parents=True, exist_ok=True)
+        (exports_dir / "evil_link").symlink_to(outside_dir, target_is_directory=True)
+        r_sym = client.post(
+            f"/v1/sessions/{sid}/export_adapter",
+            json={"name": "evil_link"},
+            headers=AUTH_HEADERS,
+        )
+        assert r_sym.status_code == 403
+        assert r_sym.json()["error"]["code"] == "invalid_checkpoint_path"
+
+
+def test_sample_stop_and_top_p_over_http(tmp_path: Path) -> None:
+    """POST /v1/sessions/{sid}/sample accepts top_p/stop, returns stop_reasons, validates 422."""
+    app = create_app(_make_settings(tmp_path))
+    with TestClient(app) as client:
+        sid = _create_session(client)
+        r_bad = client.post(
+            f"/v1/sessions/{sid}/sample",
+            json={"prompts": ["Hello"], "params": {"max_tokens": 4, "top_p": 1.5}},
+            headers=AUTH_HEADERS,
+        )
+        assert r_bad.status_code == 422
+
+        r_ok = client.post(
+            f"/v1/sessions/{sid}/sample",
+            json={
+                "prompts": ["Once upon a time"],
+                "params": {"max_tokens": 12, "temperature": 0.7, "top_p": 0.9, "stop": ["\n"]},
+            },
+            headers=AUTH_HEADERS,
+        )
+        assert r_ok.status_code == 202
+        done = _wait_future(client, r_ok.json()["future_id"])
+        assert done["status"] == "done"
+        assert done["result"]["stop_reasons"] in (["length"], ["eos"], ["stop"])

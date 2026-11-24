@@ -5,23 +5,28 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from lork.wire import (
+    ExportAdapterResult,
     OptimParams,
     SampleParams,
     TrainerInitConfig,
     WireBatch,
 )
 
+__version__ = "0.2.0"
+
 if TYPE_CHECKING:
     from lork.schemas import ForwardBackwardBatch
     from lork.trainer import LoraTrainer
 
 __all__ = [
+    "ExportAdapterResult",
     "ForwardBackwardBatch",
     "LoraTrainer",
     "OptimParams",
     "SampleParams",
     "TrainerInitConfig",
     "WireBatch",
+    "__version__",
 ]
 
 

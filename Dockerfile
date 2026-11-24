@@ -33,4 +33,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/v1/healthz || exit 1
 
-CMD ["sh", "-c", "python3.11 -m uvicorn lork.server.app:create_app --factory --host ${LORK_HOST} --port ${LORK_PORT}"]
+CMD ["sh", "-c", "lork serve --host ${LORK_HOST} --port ${LORK_PORT}"]

@@ -25,7 +25,7 @@ pip install "lork[server]"
 ```bash
 export LORK_API_KEYS="dev-secret-key"
 export LORK_DEVICE="cpu"   # or cuda / mps
-uvicorn lork.server.app:create_app --factory --host 127.0.0.1 --port 8000
+lork serve --host 127.0.0.1 --port 8000
 ```
 
 ### 3. Run Training via the SDK (5 Lines)
@@ -47,8 +47,9 @@ with ServiceClient("http://127.0.0.1:8000", "dev-secret-key") as client, \
 | `create_training_client(base_model, rank, alpha, target_modules, device, dtype)` | Initializes a dedicated session worker thread with frozen base weights and `fp32` LoRA adapters. |
 | `forward_backward(batch, loss_fn, return_logprobs=True)` | Accumulates weighted gradients across micro-batches without stepping weights; supports `"cross_entropy"` or precomputed per-token advantages, and can omit `logprobs` (`return_logprobs=False`) to shrink wire payloads. |
 | `optim_step(OptimParams(...))` | Normalizes accumulated gradients by window weight, steps `AdamW`, zeros gradients. Idempotent on SDK-generated `step_id`. |
-| `sample(prompts, SampleParams(...))` | Autoregressive generation returning completions, token IDs, and per-token log-probabilities (optional per-call `seed`). |
+| `sample(prompts, SampleParams(...))` | Autoregressive generation returning completions, token IDs, per-token log-probabilities, and `stop_reasons` (`"length"`, `"eos"`, `"stop"`); supports `temperature`, `top_p`, `stop` sequences, and per-call `seed`. |
 | `save_state(name)` / `load_state(name)` | Persists and restores LoRA weights (`safetensors`) and full `AdamW` optimizer state. |
+| `export_adapter(name)` | Exports standalone PEFT adapter files (`adapter_config.json` + `adapter_model.safetensors`) ready for `PeftModel.from_pretrained` or vLLM. |
 | `close()` / context manager | Deletes the remote session, frees trainer memory, and empties device caches. |
 
 ## Examples

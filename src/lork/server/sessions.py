@@ -34,8 +34,13 @@ class InvalidCheckpointPathError(Exception):
     """Raised when checkpoint path validation or symlink containment fails."""
 
 
-def resolve_safe_checkpoint_path(checkpoint_root: Path, session_id: str, name: str) -> Path:
-    """Resolve checkpoint path inside per-session directory and reject traversal/symlinks."""
+def _resolve_safe_subpath(
+    checkpoint_root: Path,
+    session_id: str,
+    name: str,
+    subdir: str | None = None,
+) -> Path:
+    """Resolve named directory inside a session's storage tree and reject traversal/symlinks."""
     if not _SAFE_NAME_RE.match(name):
         raise InvalidCheckpointPathError(
             f"Checkpoint name {name!r} violates pattern ^[A-Za-z0-9_-]{{1,64}}$"
@@ -50,19 +55,29 @@ def resolve_safe_checkpoint_path(checkpoint_root: Path, session_id: str, name: s
     if not session_resolved.is_relative_to(root_resolved):
         raise InvalidCheckpointPathError("Session checkpoint directory escaped checkpoint root")
 
-    target = session_resolved / name
+    base_dir = session_resolved
+    if subdir is not None:
+        nested = session_resolved / subdir
+        if nested.is_symlink():
+            raise InvalidCheckpointPathError(f"Session {subdir} directory must not be a symlink")
+        nested.mkdir(parents=True, exist_ok=True)
+        base_dir = nested.resolve()
+        if not base_dir.is_relative_to(session_resolved):
+            raise InvalidCheckpointPathError(
+                f"Session {subdir} directory escaped session directory"
+            )
+
+    target = base_dir / name
     if target.is_symlink():
         target_resolved = target.resolve()
-        if not target_resolved.is_relative_to(session_resolved):
+        if not target_resolved.is_relative_to(base_dir):
             raise InvalidCheckpointPathError(
                 f"Checkpoint symlink {name!r} points outside session directory"
             )
         raise InvalidCheckpointPathError(f"Checkpoint path {name!r} must not be a symlink")
 
     target_resolved = target.resolve()
-    if target_resolved.parent != session_resolved or not target_resolved.is_relative_to(
-        session_resolved
-    ):
+    if target_resolved.parent != base_dir or not target_resolved.is_relative_to(base_dir):
         raise InvalidCheckpointPathError(
             f"Checkpoint path {name!r} resolved outside session directory"
         )
@@ -71,12 +86,22 @@ def resolve_safe_checkpoint_path(checkpoint_root: Path, session_id: str, name: s
         for child in target.rglob("*"):
             if child.is_symlink():
                 child_resolved = child.resolve()
-                if not child_resolved.is_relative_to(session_resolved):
+                if not child_resolved.is_relative_to(base_dir):
                     raise InvalidCheckpointPathError(
                         "Checkpoint directory contains symlink pointing outside session directory"
                     )
 
     return target_resolved
+
+
+def resolve_safe_checkpoint_path(checkpoint_root: Path, session_id: str, name: str) -> Path:
+    """Resolve checkpoint path inside per-session directory and reject traversal/symlinks."""
+    return _resolve_safe_subpath(checkpoint_root, session_id, name)
+
+
+def resolve_safe_export_path(checkpoint_root: Path, session_id: str, name: str) -> Path:
+    """Resolve adapter export path inside per-session exports directory."""
+    return _resolve_safe_subpath(checkpoint_root, session_id, name, subdir="exports")
 
 
 def _empty_device_cache() -> None:
@@ -212,6 +237,19 @@ class SessionWorker:
             trainer = self._require_trainer()
             trainer.load_state(safe_path)
             return {"name": name}
+
+        return self.submit(_op)
+
+    def submit_export_adapter(self, name: str) -> FutureRecord:
+        resolve_safe_export_path(self._checkpoint_root, self.session_id, name)
+
+        def _op() -> dict[str, Any]:
+            safe_path = resolve_safe_export_path(
+                self._checkpoint_root, self.session_id, name
+            )
+            trainer = self._require_trainer()
+            files = trainer.export_adapter(safe_path)
+            return {"name": name, "path": str(safe_path), "files": files}
 
         return self.submit(_op)
 

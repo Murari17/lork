@@ -97,7 +97,17 @@ class SampleParams(BaseModel):
 
     max_tokens: int = Field(..., gt=0)
     temperature: float = Field(default=1.0, ge=0.0)
+    top_p: float = Field(default=1.0, gt=0.0, le=1.0)
+    stop: list[str] = Field(default_factory=list, max_length=8)
     seed: int | None = None
+
+    @field_validator("stop")
+    @classmethod
+    def _validate_stop(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not item:
+                raise ValueError("stop sequences must be non-empty strings")
+        return value
 
 
 class SampleRequest(BaseModel):
@@ -282,9 +292,18 @@ class SampleResult(BaseModel):
     completions: list[str]
     token_ids: list[list[int]]
     logprobs: list[list[float]]
+    stop_reasons: list[Literal["length", "eos", "stop"]] = Field(default_factory=list)
 
 
 class StateResult(BaseModel):
     """Typed result for save_state / load_state future."""
 
     name: str
+
+
+class ExportAdapterResult(BaseModel):
+    """Typed result for export_adapter future."""
+
+    name: str
+    path: str
+    files: list[str]

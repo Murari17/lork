@@ -827,3 +827,71 @@ def test_sdk_forward_backward_return_logprobs_false(live_server: str) -> None:
         res = tc.forward_backward(batch, loss_fn="cross_entropy", return_logprobs=False).result()
         assert res.loss > 0.0
         assert res.logprobs is None
+
+
+def test_sdk_export_adapter_and_sample_stop(live_server: str) -> None:
+    """SDK export_adapter returns ExportAdapterResult and sample honors stop/stop_reasons."""
+    batch = _make_wire_batch("SDK export adapter test.", batch_size=1, seq_len=8)
+    with (
+        ServiceClient(base_url=live_server, api_key=API_KEY) as client,
+        client.create_training_client(
+            base_model=MODEL_NAME,
+            rank=4,
+            alpha=8.0,
+            target_modules=TARGET_MODULES,
+            device="cpu",
+        ) as tc,
+    ):
+        tc.forward_backward(batch, return_logprobs=False).result()
+        tc.optim_step(OptimParams(lr=5e-4)).result()
+        exp = tc.export_adapter("sdk_export_1").result()
+        assert exp.name == "sdk_export_1"
+        assert "adapter_config.json" in exp.files
+        assert "adapter_model.safetensors" in exp.files
+
+        greedy = tc.sample(
+            ["Once upon a time in a small village"],
+            SampleParams(max_tokens=16, temperature=0.0),
+        ).result()
+        base_text = greedy.completions[0]
+        stop_seq = base_text[max(1, len(base_text) // 3) : max(1, len(base_text) // 3) + 2]
+        stopped = tc.sample(
+            ["Once upon a time in a small village"],
+            SampleParams(max_tokens=16, temperature=0.0, top_p=1.0, stop=[stop_seq]),
+        ).result()
+        assert stopped.stop_reasons == ["stop"]
+        assert stop_seq not in stopped.completions[0]
+
+
+def test_cli_version_no_torch_import() -> None:
+    """lork.cli --version and serve --help run cleanly without importing ML deps."""
+    code = """
+import io
+import sys
+from contextlib import redirect_stdout
+
+for blocked in ("torch", "transformers", "peft", "uvicorn"):
+    sys.modules[blocked] = None
+
+import lork
+import lork.cli
+
+buf = io.StringIO()
+with redirect_stdout(buf):
+    rc = lork.cli.main(["--version"])
+assert rc == 0
+assert buf.getvalue().strip() == f"lork {lork.__version__}"
+
+with redirect_stdout(io.StringIO()):
+    rc_help = lork.cli.main(["serve", "--help"])
+assert rc_help == 0
+print("cli_ok")
+"""
+    res = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
+    assert "cli_ok" in res.stdout

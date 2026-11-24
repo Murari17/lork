@@ -109,7 +109,7 @@ Future result:
 
 ## `POST /v1/sessions/{session_id}/sample`
 
-Autoregressively generates completions and per-token log-probabilities. Supports optional `seed` for deterministic per-call sampling.
+Autoregressively generates completions, per-token log-probabilities, and `stop_reasons` (`"length"`, `"eos"`, or `"stop"`). Supports `temperature`, `top_p` nucleus filtering, up to 8 `stop` strings, and optional `seed` for deterministic per-call sampling.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/v1/sessions/sess_.../sample \
@@ -117,13 +117,13 @@ curl -s -X POST http://127.0.0.1:8000/v1/sessions/sess_.../sample \
   -H "Content-Type: application/json" \
   -d '{
     "prompts": ["Hello, my name is"],
-    "params": {"max_tokens": 8, "temperature": 1.0, "seed": 42}
+    "params": {"max_tokens": 8, "temperature": 0.9, "top_p": 0.95, "stop": ["\n"], "seed": 42}
   }'
 ```
 
 Future result:
 ```json
-{"completions": ["..."], "token_ids": [[...]], "logprobs": [[...]]}
+{"completions": ["..."], "token_ids": [[...]], "logprobs": [[...]], "stop_reasons": ["length"]}
 ```
 
 ---
@@ -137,6 +137,24 @@ curl -s -X POST http://127.0.0.1:8000/v1/sessions/sess_.../save_state \
   -H "Authorization: Bearer dev-secret-key" \
   -H "Content-Type: application/json" \
   -d '{"name": "ckpt_01"}'
+```
+
+---
+
+## `POST /v1/sessions/{session_id}/export_adapter`
+
+Exports standalone PEFT LoRA adapter files (`adapter_config.json`, `adapter_model.safetensors`) under `<checkpoint_root>/<session_id>/exports/<name>` for direct loading via `PeftModel.from_pretrained` or vLLM. Rejects invalid names with `422` and symlink escapes with `403`.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/v1/sessions/sess_.../export_adapter \
+  -H "Authorization: Bearer dev-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "adapter_v1"}'
+```
+
+Future result:
+```json
+{"name": "adapter_v1", "path": ".../exports/adapter_v1", "files": ["adapter_config.json", "adapter_model.safetensors"]}
 ```
 
 ---

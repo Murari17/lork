@@ -256,6 +256,7 @@ class LoraTrainer:
         completions: list[str] = []
         all_token_ids: list[list[int]] = []
         all_logprobs: list[list[float]] = []
+        stop_reasons: list[Literal["length", "eos", "stop"]] = []
 
         was_training = self.model.training
         self.model.eval()
@@ -271,6 +272,8 @@ class LoraTrainer:
                     past_key_values: Any = None
                     gen_ids: list[int] = []
                     gen_lps: list[float] = []
+                    stop_reason: Literal["length", "eos", "stop"] = "length"
+                    decoded_override: str | None = None
 
                     for _ in range(req.params.max_tokens):
                         outputs = self.model(
@@ -289,9 +292,25 @@ class LoraTrainer:
                                 next_logits / req.params.temperature,
                                 dim=-1,
                             )
-                            next_token = torch.multinomial(
-                                probs, num_samples=1, generator=generator
-                            )
+                            if req.params.top_p < 1.0:
+                                sorted_probs, sorted_indices = torch.sort(
+                                    probs, descending=True, dim=-1
+                                )
+                                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                                remove_mask = (cumulative_probs - sorted_probs) > req.params.top_p
+                                remove_mask[:, 0] = False
+                                filtered_probs = sorted_probs.masked_fill(remove_mask, 0.0)
+                                filtered_probs = filtered_probs / filtered_probs.sum(
+                                    dim=-1, keepdim=True
+                                )
+                                sampled_idx = torch.multinomial(
+                                    filtered_probs, num_samples=1, generator=generator
+                                )
+                                next_token = torch.gather(sorted_indices, -1, sampled_idx)
+                            else:
+                                next_token = torch.multinomial(
+                                    probs, num_samples=1, generator=generator
+                                )
 
                         tok_id = int(next_token[0, 0].item())
                         tok_lp = float(log_probs[0, tok_id].item())
@@ -303,14 +322,40 @@ class LoraTrainer:
                             self.tokenizer.eos_token_id is not None
                             and tok_id == self.tokenizer.eos_token_id
                         ):
+                            stop_reason = "eos"
                             break
 
-                    decoded = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
-                    if not isinstance(decoded, str):
-                        raise TypeError(f"Expected decoded str, got {type(decoded).__name__}")
+                        if req.params.stop:
+                            partial = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+                            if not isinstance(partial, str):
+                                raise TypeError(
+                                    f"Expected decoded str, got {type(partial).__name__}"
+                                )
+                            earliest_idx: int | None = None
+                            for stop_seq in req.params.stop:
+                                found_at = partial.find(stop_seq)
+                                if found_at != -1 and (
+                                    earliest_idx is None or found_at < earliest_idx
+                                ):
+                                    earliest_idx = found_at
+                            if earliest_idx is not None:
+                                decoded_override = partial[:earliest_idx]
+                                stop_reason = "stop"
+                                break
+
+                    if decoded_override is not None:
+                        decoded = decoded_override
+                    else:
+                        raw_decoded = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+                        if not isinstance(raw_decoded, str):
+                            raise TypeError(
+                                f"Expected decoded str, got {type(raw_decoded).__name__}"
+                            )
+                        decoded = raw_decoded
                     completions.append(decoded)
                     all_token_ids.append(gen_ids)
                     all_logprobs.append(gen_lps)
+                    stop_reasons.append(stop_reason)
         finally:
             if was_training:
                 self.model.train()
@@ -319,7 +364,16 @@ class LoraTrainer:
             "completions": completions,
             "token_ids": all_token_ids,
             "logprobs": all_logprobs,
+            "stop_reasons": stop_reasons,
         }
+
+    def export_adapter(self, path: str | Path) -> list[str]:
+        """Export standalone PEFT LoRA adapter files (for vLLM / PeftModel.from_pretrained)."""
+        validated = StatePathInput.model_validate({"path": path})
+        export_dir = validated.path
+        export_dir.mkdir(parents=True, exist_ok=True)
+        self.model.save_pretrained(str(export_dir), safe_serialization=True)
+        return sorted(p.name for p in export_dir.iterdir() if p.is_file())
 
     def save_state(self, path: str | Path) -> None:
         """Persist LoRA weights, AdamW optimizer state, step ledger, and pending grads."""

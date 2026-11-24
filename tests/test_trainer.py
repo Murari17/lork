@@ -7,12 +7,13 @@ from pathlib import Path
 import pytest
 import torch
 import torch.nn.functional as F
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, PeftModel, TaskType, get_peft_model
 from pydantic import ValidationError
 from tests.conftest import TARGET_MODULES
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from lork.trainer import LoraTrainer
+from lork.wire import SampleParams
 
 
 def _make_toy_batch(
@@ -646,3 +647,95 @@ def test_forward_backward_return_logprobs_false(model_name: str, test_device: st
     assert "logprobs" in with_lp
     assert "logprobs" not in without_lp
     assert without_lp["loss"] == with_lp["loss"]
+
+
+def test_sample_params_validation_top_p_and_stop() -> None:
+    """SampleParams validates top_p bounds and non-empty stop strings (allowing whitespace)."""
+    with pytest.raises(ValidationError):
+        SampleParams(max_tokens=4, top_p=0.0)
+    with pytest.raises(ValidationError):
+        SampleParams(max_tokens=4, top_p=1.5)
+    with pytest.raises(ValidationError):
+        SampleParams(max_tokens=4, stop=[""])
+    with pytest.raises(ValidationError):
+        SampleParams(max_tokens=4, stop=["x"] * 9)
+
+    valid_ws = SampleParams(max_tokens=4, top_p=0.9, stop=["\n"])
+    assert valid_ws.stop == ["\n"]
+    assert valid_ws.top_p == 0.9
+
+
+def test_sample_top_p_and_stop_sequences(model_name: str, test_device: str) -> None:
+    """sample() enforces stop strings (returning stop_reasons='stop') and top_p filtering."""
+    trainer = LoraTrainer(
+        base_model=model_name,
+        rank=4,
+        alpha=8,
+        target_modules=TARGET_MODULES,
+        device=test_device,
+    )
+    prompt = "Once upon a time in a small village"
+    greedy = trainer.sample([prompt], {"max_tokens": 16, "temperature": 0.0})
+    assert len(greedy["token_ids"][0]) == 16
+    assert greedy["stop_reasons"] == ["length"]
+
+    base_text = greedy["completions"][0]
+    cut_start = max(1, len(base_text) // 3)
+    stop_seq = base_text[cut_start : cut_start + 3]
+    assert stop_seq in base_text
+
+    stopped = trainer.sample(
+        [prompt],
+        {"max_tokens": 16, "temperature": 0.0, "stop": [stop_seq]},
+    )
+    assert stopped["stop_reasons"] == ["stop"]
+    assert stop_seq not in stopped["completions"][0]
+    assert stopped["completions"][0] == base_text[: base_text.index(stop_seq)]
+    assert len(stopped["token_ids"][0]) < 16
+
+    # Tiny top_p=1e-6 keeps only the highest-probability token, matching greedy decoding.
+    num_prompt = "1, 2, 3, 4, 5, 6, 7,"
+    greedy_num = trainer.sample([num_prompt], {"max_tokens": 6, "temperature": 0.0})
+    nuc_num = trainer.sample(
+        [num_prompt],
+        {"max_tokens": 6, "temperature": 1.0, "top_p": 1e-6, "seed": 42},
+    )
+    assert nuc_num["token_ids"] == greedy_num["token_ids"]
+    assert nuc_num["completions"] == greedy_num["completions"]
+
+
+def test_export_adapter_loads_in_raw_peft(
+    model_name: str, test_device: str, tmp_path: Path
+) -> None:
+    """export_adapter writes standard PEFT adapter files matching trainer logits."""
+    trainer = LoraTrainer(
+        base_model=model_name,
+        rank=4,
+        alpha=8,
+        target_modules=TARGET_MODULES,
+        device=test_device,
+    )
+    batch = _make_toy_batch(model_name, "Export adapter PEFT parity test.", batch_size=2, seq_len=8)
+    for idx in range(3):
+        trainer.forward_backward(batch, loss_fn="cross_entropy")
+        trainer.optim_step(f"exp-{idx}", {"lr": 1e-3})
+
+    export_dir = tmp_path / "exported_adapter"
+    files = trainer.export_adapter(export_dir)
+    assert "adapter_config.json" in files
+    assert "adapter_model.safetensors" in files
+    assert (export_dir / "adapter_config.json").is_file()
+    assert (export_dir / "adapter_model.safetensors").is_file()
+    assert not (export_dir / "trainer_state.pt").exists()
+
+    fresh_base = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32).to(
+        trainer.device
+    )
+    loaded_peft = PeftModel.from_pretrained(fresh_base, str(export_dir)).to(trainer.device)
+    loaded_peft.eval()
+    trainer.model.eval()
+    dev_input_ids = batch["input_ids"].to(trainer.device)
+    with torch.no_grad():
+        trainer_logits = trainer.model(input_ids=dev_input_ids).logits.float()
+        exported_logits = loaded_peft(input_ids=dev_input_ids).logits.float()
+    assert torch.allclose(exported_logits, trainer_logits, atol=1e-5)

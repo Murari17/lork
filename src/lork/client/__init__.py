@@ -13,6 +13,7 @@ from lork.client.exceptions import (
 )
 from lork.client.futures import APIFuture
 from lork.wire import (
+    ExportAdapterResult,
     ForwardBackwardResult,
     OptimParams,
     OptimStepResult,
@@ -26,6 +27,7 @@ __all__ = [
     "APIFuture",
     "AmbiguousSubmissionError",
     "AuthError",
+    "ExportAdapterResult",
     "ForwardBackwardResult",
     "LorkError",
     "LorkTimeoutError",

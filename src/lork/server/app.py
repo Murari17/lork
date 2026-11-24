@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from tqdm import tqdm
 
+from lork import __version__
 from lork.server.futures import FutureStore
 from lork.server.models import (
     CreateSessionRequest,
@@ -184,7 +185,7 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
                 )
             )
 
-    app = FastAPI(title="Lork", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Lork", version=__version__, lifespan=lifespan)
     app.add_middleware(_BodySizeLimitMiddleware, max_bytes=cfg.max_request_body_bytes)
 
     @app.middleware("http")
@@ -355,6 +356,20 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
     ) -> FutureSubmittedResponse:
         worker = session_manager.get_session(session_id)
         future = worker.submit_load_state(payload.name)
+        return FutureSubmittedResponse(future_id=future.future_id, session_id=session_id)
+
+    @app.post(
+        "/v1/sessions/{session_id}/export_adapter",
+        status_code=status.HTTP_202_ACCEPTED,
+        dependencies=[Depends(require_auth)],
+        response_model=FutureSubmittedResponse,
+    )
+    async def export_adapter(
+        session_id: str,
+        payload: StateHttpRequest,
+    ) -> FutureSubmittedResponse:
+        worker = session_manager.get_session(session_id)
+        future = worker.submit_export_adapter(payload.name)
         return FutureSubmittedResponse(future_id=future.future_id, session_id=session_id)
 
     @app.get(

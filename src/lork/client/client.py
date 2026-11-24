@@ -23,6 +23,7 @@ from lork.client.futures import APIFuture
 from lork.wire import (
     CreateSessionRequest,
     ErrorEnvelope,
+    ExportAdapterResult,
     ForwardBackwardResult,
     ForwardBackwardWireRequest,
     FutureStatusResponse,
@@ -217,6 +218,24 @@ class TrainingClient:
             client=self._client,
             future_id=submitted.future_id,
             parser=StateResult.model_validate,
+        )
+
+    def export_adapter(self, name: str) -> APIFuture[ExportAdapterResult]:
+        """Export standalone PEFT LoRA adapter files asynchronously."""
+        try:
+            wire_req = StateWireRequest.model_validate({"name": name})
+        except PydanticValidationError as exc:
+            raise ValidationError(str(exc)) from exc
+
+        submitted = self._client._post_op(
+            f"/v1/sessions/{self.session_id}/export_adapter",
+            payload=wire_req.model_dump(),
+            idempotent=False,
+        )
+        return APIFuture(
+            client=self._client,
+            future_id=submitted.future_id,
+            parser=ExportAdapterResult.model_validate,
         )
 
 

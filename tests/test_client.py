@@ -138,6 +138,8 @@ class FaultInjectingProxy:
         self.target_port = target_port
         self.drop_path_substring: str | None = None
         self.drops_remaining: int = 0
+        self.status_502_path_substring: str | None = None
+        self.status_502_remaining: int = 0
         self.recorded_requests: list[tuple[str, str, bytes]] = []
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -208,6 +210,7 @@ class FaultInjectingProxy:
             upstream_req = ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1") + body
 
             should_drop = False
+            should_502 = False
             with self._lock:
                 self.recorded_requests.append((method, path, body))
                 if (
@@ -217,6 +220,13 @@ class FaultInjectingProxy:
                 ):
                     self.drops_remaining -= 1
                     should_drop = True
+                elif (
+                    self.status_502_path_substring is not None
+                    and self.status_502_path_substring in path
+                    and self.status_502_remaining > 0
+                ):
+                    self.status_502_remaining -= 1
+                    should_502 = True
 
             with socket.create_connection((self.target_host, self.target_port), timeout=30.0) as up:
                 up.sendall(upstream_req)
@@ -224,6 +234,16 @@ class FaultInjectingProxy:
                     # Wait for the server to begin replying so we prove it received the request,
                     # then close client_sock without forwarding the response.
                     up.recv(1)
+                    return
+                if should_502:
+                    up.recv(1)
+                    client_sock.sendall(
+                        b"HTTP/1.1 502 Bad Gateway\r\n"
+                        b"Content-Type: text/plain\r\n"
+                        b"Content-Length: 11\r\n"
+                        b"Connection: close\r\n\r\n"
+                        b"Bad Gateway"
+                    )
                     return
                 while True:
                     resp_chunk = up.recv(4096)
@@ -421,6 +441,46 @@ def test_forward_backward_drop_after_send_raises_ambiguous_and_no_retry(
         ) as tc:
             proxy.drop_path_substring = "/forward_backward"
             proxy.drops_remaining = 1
+
+            with pytest.raises(AmbiguousSubmissionError) as exc_info:
+                tc.forward_backward(batch, loss_fn="cross_entropy")
+
+            assert exc_info.value.cause is not None
+            fb_posts = [
+                (m, p)
+                for (m, p, _body) in proxy.recorded_requests
+                if m == "POST" and p.endswith("/forward_backward")
+            ]
+            assert len(fb_posts) == 1
+    finally:
+        client.close()
+        proxy.close()
+
+
+def test_forward_backward_502_after_forward_raises_ambiguous_and_no_retry(
+    live_server: str,
+) -> None:
+    """502 after proxy forwards request raises AmbiguousSubmissionError and does NOT retry."""
+    host, port_str = live_server.removeprefix("http://").split(":")
+    proxy = FaultInjectingProxy(host, int(port_str))
+    batch = _make_wire_batch("Ambiguous 502 after forward batch.", batch_size=2, seq_len=8)
+
+    client = ServiceClient(
+        base_url=proxy.base_url,
+        api_key=API_KEY,
+        max_retries=3,
+        backoff_base=0.05,
+    )
+    try:
+        with client.create_training_client(
+            base_model=MODEL_NAME,
+            rank=4,
+            alpha=8.0,
+            target_modules=TARGET_MODULES,
+            device="cpu",
+        ) as tc:
+            proxy.status_502_path_substring = "/forward_backward"
+            proxy.status_502_remaining = 1
 
             with pytest.raises(AmbiguousSubmissionError) as exc_info:
                 tc.forward_backward(batch, loss_fn="cross_entropy")

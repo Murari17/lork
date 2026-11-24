@@ -66,6 +66,14 @@ def _parse_error_body(response: httpx.Response) -> tuple[str, str]:
         return f"http_{response.status_code}", response.text or response.reason_phrase
 
 
+def _has_structured_error_envelope(response: httpx.Response) -> bool:
+    try:
+        ErrorEnvelope.model_validate(response.json())
+    except (ValueError, PydanticValidationError):
+        return False
+    return True
+
+
 def _parse_retry_after(header_val: str | None) -> float | None:
     if header_val is None:
         return None
@@ -337,14 +345,11 @@ class ServiceClient:
         timeout_override: float | None = None,
     ) -> dict[str, Any]:
         for attempt in range(self._max_retries + 1):
-            req_body = dict(json_body) if json_body is not None else None
-            if req_body is not None and path.endswith("/optim_step") and attempt > 0:
-                req_body["step_id"] = f"step_{uuid.uuid4().hex}"
             try:
                 response = self._http.request(
                     method,
                     path,
-                    json=req_body,
+                    json=json_body,
                     params=params,
                     timeout=timeout_override if timeout_override is not None else self._timeout,
                 )
@@ -356,6 +361,11 @@ class ServiceClient:
                 raise LoraforgeError(f"Connection failed for {method} {path}: {exc}") from exc
             except httpx.HTTPError as exc:
                 logger.debug("transport_error method=%s path=%s attempt=%d", method, path, attempt)
+                if not idempotent:
+                    raise AmbiguousSubmissionError(
+                        f"Ambiguous failure on non-idempotent {method} {path}: {exc}",
+                        cause=exc,
+                    ) from exc
                 if attempt < self._max_retries:
                     self._sleep_for_retry(attempt)
                     continue
@@ -371,14 +381,23 @@ class ServiceClient:
                 attempt,
             )
 
-            if response.status_code in (429, 500, 502, 503, 504):
+            status_code = response.status_code
+            if status_code in (429, 500, 502, 503, 504):
+                can_retry_status = idempotent or status_code == 429 or (
+                    status_code == 503 and _has_structured_error_envelope(response)
+                )
+                if not can_retry_status:
+                    raise AmbiguousSubmissionError(
+                        f"Ambiguous HTTP {status_code} on non-idempotent {method} {path}",
+                        cause=LoraforgeError(f"HTTP {status_code}: {response.text}"),
+                    )
                 if attempt < self._max_retries:
                     retry_after = _parse_retry_after(response.headers.get("Retry-After"))
                     self._sleep_for_retry(attempt, retry_after=retry_after)
                     continue
                 self._raise_for_http_error(response)
 
-            if response.status_code >= 400:
+            if status_code >= 400:
                 self._raise_for_http_error(response)
 
             payload: dict[str, Any] = response.json()

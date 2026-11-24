@@ -121,11 +121,13 @@ class SessionWorker:
         init_config: TrainerInitConfig,
         checkpoint_root: Path,
         future_store: FutureStore,
+        on_init_failed: Callable[[str], None] | None = None,
     ) -> None:
         self.session_id: str = session_id
         self._init_config: TrainerInitConfig = init_config
         self._checkpoint_root: Path = checkpoint_root
         self._future_store: FutureStore = future_store
+        self._on_init_failed: Callable[[str], None] | None = on_init_failed
 
         self._queue: queue.Queue[tuple[FutureRecord, Callable[[], dict[str, Any]]] | None] = (
             queue.Queue()
@@ -146,14 +148,19 @@ class SessionWorker:
 
     def submit_init(self) -> FutureRecord:
         def _init_op() -> dict[str, Any]:
-            self._trainer = LoraTrainer(
-                base_model=self._init_config.base_model,
-                rank=self._init_config.rank,
-                alpha=self._init_config.alpha,
-                target_modules=self._init_config.target_modules,
-                device=self._init_config.device,
-                dtype=self._init_config.dtype,
-            )
+            try:
+                self._trainer = LoraTrainer(
+                    base_model=self._init_config.base_model,
+                    rank=self._init_config.rank,
+                    alpha=self._init_config.alpha,
+                    target_modules=self._init_config.target_modules,
+                    device=self._init_config.device,
+                    dtype=self._init_config.dtype,
+                )
+            except Exception:
+                if self._on_init_failed is not None:
+                    self._on_init_failed(self.session_id)
+                raise
             return {"session_id": self.session_id}
 
         return self.submit(_init_op)
@@ -236,6 +243,10 @@ class SessionWorker:
             )
             trainer = self._require_trainer()
             trainer.load_state(safe_path)
+            self._step_results = {
+                step_id: {"step": step_num}
+                for step_id, step_num in trainer.applied_steps.items()
+            }
             return {"name": name}
 
         return self.submit(_op)
@@ -265,7 +276,7 @@ class SessionWorker:
                 return
             self._closed = True
         self._queue.put(None)
-        if self._thread.is_alive():
+        if self._thread.is_alive() and threading.current_thread() is not self._thread:
             self._thread.join(timeout=30.0)
         self._trainer = None
         _empty_device_cache()
@@ -319,10 +330,17 @@ class SessionManager:
                 init_config=init_config,
                 checkpoint_root=self._settings.checkpoint_root,
                 future_store=self._future_store,
+                on_init_failed=self._cleanup_failed_session,
             )
             self._sessions[session_id] = worker
         future = worker.submit_init()
         return session_id, future
+
+    def _cleanup_failed_session(self, session_id: str) -> None:
+        with self._lock:
+            worker = self._sessions.pop(session_id, None)
+        if worker is not None:
+            worker.close()
 
     def get_session(self, session_id: str) -> SessionWorker:
         self.evict_idle_sessions()

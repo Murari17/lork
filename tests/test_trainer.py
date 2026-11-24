@@ -12,8 +12,16 @@ from pydantic import ValidationError
 from tests.conftest import TARGET_MODULES
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from lork.schemas import ForwardBackwardBatch
 from lork.trainer import LoraTrainer
-from lork.wire import SampleParams
+from lork.wire import (
+    ForwardBackwardWireRequest,
+    OptimParams,
+    SampleParams,
+    SampleRequest,
+    TrainerInitConfig,
+    WireBatch,
+)
 
 
 def _make_toy_batch(
@@ -739,3 +747,142 @@ def test_export_adapter_loads_in_raw_peft(
         trainer_logits = trainer.model(input_ids=dev_input_ids).logits.float()
         exported_logits = loaded_peft(input_ids=dev_input_ids).logits.float()
     assert torch.allclose(exported_logits, trainer_logits, atol=1e-5)
+
+
+def test_validation_rejects_nan_inf_negative_tokens_and_empty_prompts() -> None:
+    """Wire and tensor schemas reject NaN/Inf floats, negative token IDs, and empty prompts."""
+    for bad_w in ([[float("nan"), 1.0]], [[float("inf"), 1.0]]):
+        with pytest.raises(ValidationError):
+            WireBatch(input_ids=[[1, 2]], target_ids=[[2, 3]], weights=bad_w)
+
+    with pytest.raises(ValidationError):
+        WireBatch(input_ids=[[-1, 2]], target_ids=[[2, 3]], weights=[[1.0, 1.0]])
+    with pytest.raises(ValidationError):
+        WireBatch(input_ids=[[1, 2]], target_ids=[[2, -100]], weights=[[1.0, 1.0]])
+
+    valid_wb = WireBatch(input_ids=[[1, 2]], target_ids=[[2, 3]], weights=[[1.0, 1.0]])
+    for bad_adv in ([[float("nan"), 1.0]], [[float("inf"), 1.0]]):
+        with pytest.raises(ValidationError):
+            ForwardBackwardWireRequest(batch=valid_wb, loss_fn=bad_adv)
+
+    with pytest.raises(ValidationError):
+        ForwardBackwardBatch(
+            input_ids=torch.tensor([[-1, 2]]),
+            target_ids=torch.tensor([[2, 3]]),
+            weights=torch.tensor([[1.0, 1.0]]),
+        )
+    with pytest.raises(ValidationError):
+        ForwardBackwardBatch(
+            input_ids=torch.tensor([[1, 2]]),
+            target_ids=torch.tensor([[2, -1]]),
+            weights=torch.tensor([[1.0, 1.0]]),
+        )
+
+    for bad_optim in (
+        {"lr": float("inf")},
+        {"lr": float("nan")},
+        {"lr": 1e-4, "weight_decay": float("inf")},
+        {"lr": 1e-4, "eps": float("inf")},
+        {"lr": 1e-4, "betas": (float("nan"), 0.999)},
+    ):
+        with pytest.raises(ValidationError):
+            OptimParams(**bad_optim)
+
+    with pytest.raises(ValidationError):
+        SampleParams(max_tokens=4, temperature=float("inf"))
+    with pytest.raises(ValidationError):
+        SampleParams(max_tokens=4, top_p=float("nan"))
+    with pytest.raises(ValidationError):
+        TrainerInitConfig(
+            base_model="Qwen/Qwen2.5-0.5B",
+            rank=4,
+            alpha=float("inf"),
+            target_modules=["q_proj"],
+        )
+    with pytest.raises(ValidationError):
+        SampleRequest(prompts=[""], params=SampleParams(max_tokens=4))
+
+
+def test_sample_multi_prompt_mixed_stop_reasons_and_earliest_stop(
+    model_name: str, test_device: str
+) -> None:
+    """Multi-prompt sample tracks independent stop_reasons and truncates at earliest stop match."""
+    trainer = LoraTrainer(
+        base_model=model_name,
+        rank=4,
+        alpha=8,
+        target_modules=TARGET_MODULES,
+        device=test_device,
+    )
+    p1 = "Once upon a time in a small village"
+    p2 = "1, 2, 3, 4, 5, 6, 7,"
+    greedy = trainer.sample([p1, p2], {"max_tokens": 16, "temperature": 0.0})
+    t1 = greedy["completions"][0]
+    t2 = greedy["completions"][1]
+    assert len(t1) >= 12
+    # Pick two disjoint substrings from p1's greedy trace, neither occurring inside p2's trace.
+    # Instead, test p1 matching stop while p2 runs to length, then test earliest-stop on p1 alone.
+    early = t1[2:5]
+    late = t1[8:11]
+    assert early in t1 and late in t1
+    earliest_idx = min(t1.index(early), t1.index(late))
+
+    both_stops = trainer.sample(
+        [p1],
+        {"max_tokens": 16, "temperature": 0.0, "stop": [late, early]},
+    )
+    assert both_stops["stop_reasons"] == ["stop"]
+    assert both_stops["completions"][0] == t1[:earliest_idx]
+
+    # Now pick a stop substring that exists in t1 but not in t2.
+    if early not in t2:
+        mixed = trainer.sample(
+            [p1, p2],
+            {"max_tokens": 16, "temperature": 0.0, "stop": [early]},
+        )
+        assert mixed["stop_reasons"] == ["stop", "length"]
+        assert mixed["completions"][0] == t1[: t1.index(early)]
+        assert mixed["completions"][1] == t2
+
+
+def test_save_load_rollback_then_export_adapter_parity(
+    model_name: str, test_device: str, tmp_path: Path
+) -> None:
+    """Exporting after load_state rollback matches step-1 logits cleanly."""
+    trainer = LoraTrainer(
+        base_model=model_name,
+        rank=4,
+        alpha=8,
+        target_modules=TARGET_MODULES,
+        device=test_device,
+    )
+    batch = _make_toy_batch(
+        model_name, "Rollback then export PEFT parity.", batch_size=2, seq_len=8
+    )
+    dev_input_ids = batch["input_ids"].to(trainer.device)
+
+    trainer.forward_backward(batch, loss_fn="cross_entropy")
+    trainer.optim_step("s1", {"lr": 1e-3})
+    trainer.model.eval()
+    with torch.no_grad():
+        step1_logits = trainer.model(input_ids=dev_input_ids).logits.float().cpu().clone()
+
+    ckpt_dir = tmp_path / "ckpt_step1"
+    trainer.save_state(ckpt_dir)
+
+    for idx in range(2, 5):
+        trainer.forward_backward(batch, loss_fn="cross_entropy")
+        trainer.optim_step(f"s{idx}", {"lr": 1e-2})
+
+    trainer.load_state(ckpt_dir)
+    export_dir = tmp_path / "exported_after_rollback"
+    trainer.export_adapter(export_dir)
+
+    fresh_base = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32).to(
+        trainer.device
+    )
+    loaded_peft = PeftModel.from_pretrained(fresh_base, str(export_dir)).to(trainer.device)
+    loaded_peft.eval()
+    with torch.no_grad():
+        exported_logits = loaded_peft(input_ids=dev_input_ids).logits.float().cpu()
+    assert torch.allclose(exported_logits, step1_logits, atol=1e-5)

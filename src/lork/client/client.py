@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 import time
 import uuid
@@ -250,10 +251,16 @@ class ServiceClient:
         max_retries: int = 3,
         backoff_base: float = 0.1,
     ) -> None:
+        if not base_url.strip():
+            raise ValidationError("base_url must not be empty")
         if not api_key.strip():
             raise ValidationError("api_key must not be empty")
+        if not math.isfinite(timeout) or timeout <= 0.0:
+            raise ValidationError(f"timeout must be finite and > 0, got {timeout}")
         if max_retries < 0:
             raise ValidationError("max_retries must be >= 0")
+        if not math.isfinite(backoff_base) or backoff_base < 0.0:
+            raise ValidationError(f"backoff_base must be finite and >= 0, got {backoff_base}")
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._max_retries = max_retries

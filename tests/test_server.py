@@ -906,3 +906,173 @@ def test_sample_stop_and_top_p_over_http(tmp_path: Path) -> None:
         done = _wait_future(client, r_ok.json()["future_id"])
         assert done["status"] == "done"
         assert done["result"]["stop_reasons"] in (["length"], ["eos"], ["stop"])
+
+
+def test_failed_session_init_releases_capacity_slot(tmp_path: Path) -> None:
+    """Failed session init frees its slot under max_sessions instead of permanently leaking."""
+    app = create_app(_make_settings(tmp_path, max_sessions=1))
+    with TestClient(app) as client:
+        bad_init = client.post(
+            "/v1/sessions",
+            json={
+                "base_model": MODEL_NAME,
+                "rank": 4,
+                "alpha": 8.0,
+                "target_modules": ["nonexistent_module_xyz"],
+                "device": "cpu",
+            },
+            headers=AUTH_HEADERS,
+        )
+        assert bad_init.status_code == 202
+        bad_done = _wait_future(client, bad_init.json()["future_id"])
+        assert bad_done["status"] == "error"
+
+        # Slot must be released immediately so creating a valid session returns 202, not 429.
+        good_init = client.post(
+            "/v1/sessions",
+            json={
+                "base_model": MODEL_NAME,
+                "rank": 4,
+                "alpha": 8.0,
+                "target_modules": TARGET_MODULES,
+                "device": "cpu",
+            },
+            headers=AUTH_HEADERS,
+        )
+        assert good_init.status_code == 202
+        good_done = _wait_future(client, good_init.json()["future_id"])
+        assert good_done["status"] == "done"
+
+
+def test_load_state_resets_optim_step_idempotency_cache(tmp_path: Path) -> None:
+    """load_state rollback clears later cached step_ids so reusing a rolled-back step_id applies."""
+    batch = _make_wire_batch("Load state idempotency reset test.", batch_size=2, seq_len=8)
+    optim_cfg = {"lr": 1e-3, "betas": [0.9, 0.999], "weight_decay": 0.0}
+    app = create_app(_make_settings(tmp_path))
+
+    with TestClient(app) as client:
+        sid = _create_session(client)
+        _wait_future(
+            client,
+            client.post(
+                f"/v1/sessions/{sid}/forward_backward",
+                json={"batch": batch, "loss_fn": "cross_entropy"},
+                headers=AUTH_HEADERS,
+            ).json()["future_id"],
+        )
+        s1 = _wait_future(
+            client,
+            client.post(
+                f"/v1/sessions/{sid}/optim_step",
+                json={"step_id": "s1", "optim_params": optim_cfg},
+                headers=AUTH_HEADERS,
+            ).json()["future_id"],
+        )
+        assert s1["result"] == {"step": 1}
+
+        assert _wait_future(
+            client,
+            client.post(
+                f"/v1/sessions/{sid}/save_state",
+                json={"name": "cp1"},
+                headers=AUTH_HEADERS,
+            ).json()["future_id"],
+        )["status"] == "done"
+
+        loss_before_s2 = _wait_future(
+            client,
+            client.post(
+                f"/v1/sessions/{sid}/forward_backward",
+                json={"batch": batch, "loss_fn": "cross_entropy"},
+                headers=AUTH_HEADERS,
+            ).json()["future_id"],
+        )["result"]["loss"]
+        s2_first = _wait_future(
+            client,
+            client.post(
+                f"/v1/sessions/{sid}/optim_step",
+                json={"step_id": "s2", "optim_params": optim_cfg},
+                headers=AUTH_HEADERS,
+            ).json()["future_id"],
+        )
+        assert s2_first["result"] == {"step": 2}
+
+        # Roll back to cp1 (taken before step_id="s2").
+        assert _wait_future(
+            client,
+            client.post(
+                f"/v1/sessions/{sid}/load_state",
+                json={"name": "cp1"},
+                headers=AUTH_HEADERS,
+            ).json()["future_id"],
+        )["status"] == "done"
+
+        _wait_future(
+            client,
+            client.post(
+                f"/v1/sessions/{sid}/forward_backward",
+                json={"batch": batch, "loss_fn": "cross_entropy"},
+                headers=AUTH_HEADERS,
+            ).json()["future_id"],
+        )
+        # Re-submitting step_id="s2" after rollback must apply the step, changing weights/loss.
+        s2_after_load = _wait_future(
+            client,
+            client.post(
+                f"/v1/sessions/{sid}/optim_step",
+                json={"step_id": "s2", "optim_params": optim_cfg},
+                headers=AUTH_HEADERS,
+            ).json()["future_id"],
+        )
+        assert s2_after_load["result"] == {"step": 2}
+
+        loss_after_s2 = _wait_future(
+            client,
+            client.post(
+                f"/v1/sessions/{sid}/forward_backward",
+                json={"batch": batch, "loss_fn": "cross_entropy"},
+                headers=AUTH_HEADERS,
+            ).json()["future_id"],
+        )["result"]["loss"]
+        assert loss_after_s2 < loss_before_s2
+
+
+def test_server_rejects_empty_prompt_and_negative_tokens_with_422(tmp_path: Path) -> None:
+    """Server rejects empty sample prompts and negative input/target token IDs with 422."""
+    app = create_app(_make_settings(tmp_path))
+    with TestClient(app) as client:
+        sid = _create_session(client)
+        r_empty_prompt = client.post(
+            f"/v1/sessions/{sid}/sample",
+            json={"prompts": [""], "params": {"max_tokens": 4}},
+            headers=AUTH_HEADERS,
+        )
+        assert r_empty_prompt.status_code == 422
+
+        r_neg_in = client.post(
+            f"/v1/sessions/{sid}/forward_backward",
+            json={
+                "batch": {
+                    "input_ids": [[-1, 2]],
+                    "target_ids": [[2, 3]],
+                    "weights": [[1.0, 1.0]],
+                },
+                "loss_fn": "cross_entropy",
+            },
+            headers=AUTH_HEADERS,
+        )
+        assert r_neg_in.status_code == 422
+
+        r_neg_tgt = client.post(
+            f"/v1/sessions/{sid}/forward_backward",
+            json={
+                "batch": {
+                    "input_ids": [[1, 2]],
+                    "target_ids": [[2, -100]],
+                    "weights": [[1.0, 1.0]],
+                },
+                "loss_fn": "cross_entropy",
+            },
+            headers=AUTH_HEADERS,
+        )
+        assert r_neg_tgt.status_code == 422

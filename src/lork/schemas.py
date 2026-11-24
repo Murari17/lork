@@ -83,6 +83,10 @@ class ForwardBackwardBatch(BaseModel):
                 f"weights shape {tuple(self.weights.shape)} does not match "
                 f"input_ids shape {tuple(self.input_ids.shape)}"
             )
+        if bool((self.input_ids < 0).any().item()):
+            raise ValueError("input_ids must contain non-negative token IDs")
+        if bool((self.target_ids < 0).any().item()):
+            raise ValueError("target_ids must contain non-negative token IDs")
         if not bool(torch.isfinite(self.weights).all().item()):
             raise ValueError("weights must contain only finite values")
         if bool((self.weights < 0.0).any().item()):

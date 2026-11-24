@@ -895,3 +895,78 @@ print("cli_ok")
     )
     assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
     assert "cli_ok" in res.stdout
+
+
+def test_service_client_validates_constructor_args() -> None:
+    """ServiceClient rejects blank base_url, bad timeout, and negative backoff."""
+    with pytest.raises(ValidationError):
+        ServiceClient("   ", API_KEY)
+    with pytest.raises(ValidationError):
+        ServiceClient("http://127.0.0.1:8000", API_KEY, timeout=0.0)
+    with pytest.raises(ValidationError):
+        ServiceClient("http://127.0.0.1:8000", API_KEY, timeout=float("inf"))
+    with pytest.raises(ValidationError):
+        ServiceClient("http://127.0.0.1:8000", API_KEY, backoff_base=-0.1)
+
+
+def test_cli_handles_bad_lork_port_env_and_invalid_port_range() -> None:
+    """Bad LORK_PORT does not break `--version`; out-of-range serve `--port` returns exit code 2."""
+    env = os.environ.copy()
+    env["LORK_PORT"] = "not-an-int"
+    code = """
+import io, sys
+from contextlib import redirect_stdout
+for blocked in ("torch", "transformers", "peft", "uvicorn"):
+    sys.modules[blocked] = None
+import lork, lork.cli
+buf = io.StringIO()
+with redirect_stdout(buf):
+    rc = lork.cli.main(["--version"])
+assert rc == 0
+assert buf.getvalue().strip() == f"lork {lork.__version__}"
+print("ok")
+"""
+    res = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert "ok" in res.stdout
+
+    import lork.cli
+
+    assert lork.cli.main(["serve", "--port", "0"]) == 2
+    assert lork.cli.main(["serve", "--port", "70000"]) == 2
+
+
+def test_export_adapter_non_idempotent_502_raises_ambiguous(live_server: str) -> None:
+    """502 after proxy forwards export_adapter raises AmbiguousSubmissionError without retry."""
+    host, port_str = live_server.removeprefix("http://").split(":")
+    proxy = FaultInjectingProxy(host, int(port_str))
+    client = ServiceClient(
+        base_url=proxy.base_url,
+        api_key=API_KEY,
+        max_retries=3,
+        backoff_base=0.05,
+    )
+    try:
+        with client.create_training_client(
+            base_model=MODEL_NAME,
+            rank=4,
+            alpha=8.0,
+            target_modules=TARGET_MODULES,
+            device="cpu",
+        ) as tc:
+            proxy.status_502_path_substring = "/export_adapter"
+            proxy.status_502_remaining = 1
+
+            with pytest.raises(AmbiguousSubmissionError) as exc_info:
+                tc.export_adapter("ambiguous_export_1")
+
+            assert exc_info.value.cause is not None
+            export_posts = [
+                (m, p)
+                for (m, p, _body) in proxy.recorded_requests
+                if m == "POST" and p.endswith("/export_adapter")
+            ]
+            assert len(export_posts) == 1
+    finally:
+        client.close()
+        proxy.close()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -42,6 +43,13 @@ class TrainerInitConfig(BaseModel):
             raise ValueError("base_model must not be empty or whitespace")
         return stripped
 
+    @field_validator("alpha")
+    @classmethod
+    def _validate_alpha(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError(f"alpha must be finite, got {value}")
+        return value
+
     @field_validator("target_modules")
     @classmethod
     def _validate_target_modules(cls, value: list[str]) -> list[str]:
@@ -64,10 +72,19 @@ class OptimParams(BaseModel):
     weight_decay: float = Field(default=0.0, ge=0.0)
     eps: float = Field(default=1e-8, gt=0.0)
 
+    @field_validator("lr", "weight_decay", "eps")
+    @classmethod
+    def _validate_finite_scalars(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError(f"optimizer hyperparameter must be finite, got {value}")
+        return value
+
     @field_validator("betas")
     @classmethod
     def _validate_betas(cls, value: tuple[float, float]) -> tuple[float, float]:
         b1, b2 = value
+        if not (math.isfinite(b1) and math.isfinite(b2)):
+            raise ValueError(f"betas must be finite, got {value}")
         if not (0.0 < b1 < 1.0 and 0.0 < b2 < 1.0):
             raise ValueError(f"betas must each be strictly between 0 and 1, got {value}")
         return value
@@ -101,6 +118,13 @@ class SampleParams(BaseModel):
     stop: list[str] = Field(default_factory=list, max_length=8)
     seed: int | None = None
 
+    @field_validator("temperature", "top_p")
+    @classmethod
+    def _validate_finite_sampling(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError(f"sampling parameter must be finite, got {value}")
+        return value
+
     @field_validator("stop")
     @classmethod
     def _validate_stop(cls, value: list[str]) -> list[str]:
@@ -117,6 +141,14 @@ class SampleRequest(BaseModel):
 
     prompts: list[str] = Field(..., min_length=1)
     params: SampleParams
+
+    @field_validator("prompts")
+    @classmethod
+    def _validate_prompts(cls, value: list[str]) -> list[str]:
+        for idx, item in enumerate(value):
+            if not item:
+                raise ValueError(f"prompts[{idx}] must not be empty")
+        return value
 
 
 class StatePathInput(BaseModel):
@@ -186,9 +218,19 @@ class WireBatch(BaseModel):
             raise ValueError(
                 f"weights shape {(b_w, t_w)} does not match input_ids {(b_in, t_in)}"
             )
+        for in_row in self.input_ids:
+            for tok in in_row:
+                if tok < 0:
+                    raise ValueError("input_ids must contain non-negative token IDs")
+        for tgt_row in self.target_ids:
+            for tok in tgt_row:
+                if tok < 0:
+                    raise ValueError("target_ids must contain non-negative token IDs")
         total_weight = 0.0
-        for row in self.weights:
-            for val in row:
+        for w_row in self.weights:
+            for val in w_row:
+                if not math.isfinite(val):
+                    raise ValueError("weights must contain only finite values")
                 if val < 0.0:
                     raise ValueError("weights must be non-negative")
                 total_weight += val
@@ -219,6 +261,10 @@ class ForwardBackwardWireRequest(BaseModel):
                     f"loss_fn advantage shape {adv_shape} does not match "
                     f"batch shape {self.batch.shape}"
                 )
+            for row in self.loss_fn:
+                for val in row:
+                    if not math.isfinite(val):
+                        raise ValueError("loss_fn advantages must contain only finite values")
         return self
 
 

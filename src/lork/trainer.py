@@ -160,6 +160,11 @@ class LoraTrainer:
         self._applied_steps: dict[str, int] = {}
         self._accum_weight_sum: float = 0.0
 
+    @property
+    def applied_steps(self) -> dict[str, int]:
+        """Return copy of applied step_id -> step ledger."""
+        return dict(self._applied_steps)
+
     def forward_backward(
         self,
         batch: dict[str, Any] | ForwardBackwardBatch,
@@ -269,6 +274,8 @@ class LoraTrainer:
                 for prompt in req.prompts:
                     encoded = self.tokenizer(prompt, return_tensors="pt")
                     cur_input: torch.Tensor = encoded["input_ids"].to(self.device)
+                    if cur_input.shape[1] == 0:
+                        raise ValueError("Prompt tokenized to 0 tokens")
                     past_key_values: Any = None
                     gen_ids: list[int] = []
                     gen_lps: list[float] = []

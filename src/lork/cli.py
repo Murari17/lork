@@ -34,7 +34,7 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("LORK_PORT", "8000")),
+        default=None,
         help="Bind port (default: LORK_PORT or 8000).",
     )
     serve_parser.add_argument(
@@ -46,7 +46,29 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_serve(host: str, port: int, log_level: str) -> int:
+def _resolve_port(port: int | None) -> int | None:
+    resolved: int
+    if port is None:
+        raw_port = os.environ.get("LORK_PORT", "8000")
+        try:
+            resolved = int(raw_port)
+        except ValueError:
+            sys.stderr.write(
+                f"Error: invalid LORK_PORT value {raw_port!r}; expected integer 1..65535\n"
+            )
+            return None
+    else:
+        resolved = port
+    if not (1 <= resolved <= 65535):
+        sys.stderr.write(f"Error: port {resolved} out of valid range 1..65535\n")
+        return None
+    return resolved
+
+
+def _cmd_serve(host: str, port: int | None, log_level: str) -> int:
+    resolved_port = _resolve_port(port)
+    if resolved_port is None:
+        return 2
     try:
         import uvicorn
     except ImportError:
@@ -66,7 +88,7 @@ def _cmd_serve(host: str, port: int, log_level: str) -> int:
         "lork.server.app:create_app",
         factory=True,
         host=host,
-        port=port,
+        port=resolved_port,
         log_level=log_level,
     )
     return 0

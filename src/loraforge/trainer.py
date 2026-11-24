@@ -226,6 +226,10 @@ class LoraTrainer:
 
         was_training = self.model.training
         self.model.eval()
+        generator: torch.Generator | None = None
+        if req.params.seed is not None:
+            generator = torch.Generator(device=self.device)
+            generator.manual_seed(req.params.seed)
         try:
             with torch.no_grad():
                 for prompt in req.prompts:
@@ -252,7 +256,9 @@ class LoraTrainer:
                                 next_logits / req.params.temperature,
                                 dim=-1,
                             )
-                            next_token = torch.multinomial(probs, num_samples=1)
+                            next_token = torch.multinomial(
+                                probs, num_samples=1, generator=generator
+                            )
 
                         tok_id = int(next_token[0, 0].item())
                         tok_lp = float(log_probs[0, tok_id].item())

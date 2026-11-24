@@ -96,6 +96,7 @@ class SampleParams(BaseModel):
 
     max_tokens: int = Field(..., gt=0)
     temperature: float = Field(default=1.0, ge=0.0)
+    seed: int | None = None
 
 
 class SampleRequest(BaseModel):

@@ -474,6 +474,35 @@ def test_sample_completions_and_logprobs(model_name: str, test_device: str) -> N
         assert all(lp <= 0.0 for lp in lps)
 
 
+def test_sample_seed_determinism(model_name: str, test_device: str) -> None:
+    """SampleParams.seed makes stochastic sampling deterministic per call."""
+    trainer = LoraTrainer(
+        base_model=model_name,
+        rank=4,
+        alpha=8,
+        target_modules=TARGET_MODULES,
+        device=test_device,
+    )
+    prompt = ["Write a short story about a forest:"]
+    run_a = trainer.sample(
+        prompts=prompt,
+        params={"max_tokens": 12, "temperature": 1.0, "seed": 42},
+    )
+    run_b = trainer.sample(
+        prompts=prompt,
+        params={"max_tokens": 12, "temperature": 1.0, "seed": 42},
+    )
+    run_c = trainer.sample(
+        prompts=prompt,
+        params={"max_tokens": 12, "temperature": 1.0, "seed": 43},
+    )
+
+    assert run_a["completions"] == run_b["completions"]
+    assert run_a["token_ids"] == run_b["token_ids"]
+    assert run_a["logprobs"] == run_b["logprobs"]
+    assert run_a["token_ids"] != run_c["token_ids"]
+
+
 def test_pydantic_input_validation_errors(model_name: str, test_device: str) -> None:
     """Invalid external inputs fail explicitly via Pydantic ValidationError or ValueError."""
     with pytest.raises(ValidationError):

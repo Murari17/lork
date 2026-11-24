@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any, Literal
 
-from dado.server.models import ErrorDetail, FutureStatusResponse
+from lork.server.models import ErrorDetail, FutureStatusResponse
 
 
 class FutureRecord:

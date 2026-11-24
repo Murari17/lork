@@ -14,10 +14,10 @@ from typing import Any
 
 import torch
 
-from dado.schemas import TrainerInitConfig
-from dado.server.futures import FutureRecord, FutureStore
-from dado.server.models import ServerSettings
-from dado.trainer import LoraTrainer
+from lork.schemas import TrainerInitConfig
+from lork.server.futures import FutureRecord, FutureStore
+from lork.server.models import ServerSettings
+from lork.trainer import LoraTrainer
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -114,7 +114,7 @@ class SessionWorker:
 
         self._thread = threading.Thread(
             target=self._worker_loop,
-            name=f"dado-session-{session_id[:12]}",
+            name=f"lork-session-{session_id[:12]}",
             daemon=True,
         )
         self._thread.start()

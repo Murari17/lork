@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for dado tests."""
+"""Shared pytest fixtures for lork tests."""
 
 from __future__ import annotations
 

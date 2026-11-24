@@ -1,18 +1,18 @@
-"""Lightweight synchronous Python SDK for dado."""
+"""Lightweight synchronous Python SDK for lork."""
 
-from dado.client.client import ServiceClient, TrainingClient, validate_batch
-from dado.client.exceptions import (
+from lork.client.client import ServiceClient, TrainingClient, validate_batch
+from lork.client.exceptions import (
     AmbiguousSubmissionError,
     AuthError,
-    DadoError,
-    DadoTimeoutError,
+    LorkError,
+    LorkTimeoutError,
     RemoteOpError,
     ServerBusyError,
     SessionNotFoundError,
     ValidationError,
 )
-from dado.client.futures import APIFuture
-from dado.wire import (
+from lork.client.futures import APIFuture
+from lork.wire import (
     ForwardBackwardResult,
     OptimParams,
     OptimStepResult,
@@ -27,8 +27,8 @@ __all__ = [
     "AmbiguousSubmissionError",
     "AuthError",
     "ForwardBackwardResult",
-    "DadoError",
-    "DadoTimeoutError",
+    "LorkError",
+    "LorkTimeoutError",
     "OptimParams",
     "OptimStepResult",
     "RemoteOpError",

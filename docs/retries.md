@@ -1,6 +1,6 @@
 # Client Retry & Failure Semantics
 
-The Python SDK (`dado.client.ServiceClient`) distinguishes operations that are safe to retry from non-idempotent operations that must **never** be silently retried after bytes may have reached the server.
+The Python SDK (`lork.client.ServiceClient`) distinguishes operations that are safe to retry from non-idempotent operations that must **never** be silently retried after bytes may have reached the server.
 
 | Operation | Pre-send Errors (`ConnectError`, `ConnectTimeout`, `PoolTimeout`) | `429 Too Many Requests` | `503` with Structured `ErrorEnvelope` | `500` / `502` / `504` or Unstructured `503` | Post-send Transport Drop (`ReadTimeout`, `ReadError`, `WriteError`, `RemoteProtocolError`) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -18,4 +18,4 @@ The Python SDK (`dado.client.ServiceClient`) distinguishes operations that are s
 | `429` or `503` after retries exhausted | `ServerBusyError` |
 | Future resolved with `status="error"` | `RemoteOpError` (carries `code` and `remote_message`) |
 | Post-send failure on non-idempotent `POST` | `AmbiguousSubmissionError` (carries `cause`, never retried) |
-| `future.result(timeout=...)` elapsed | `DadoTimeoutError` (does not cancel remote op) |
+| `future.result(timeout=...)` elapsed | `LorkTimeoutError` (does not cancel remote op) |

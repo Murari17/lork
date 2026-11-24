@@ -84,9 +84,9 @@ def main() -> None:
         tmp_path = Path(tmp_dir)
         log_path = tmp_path / "uvicorn.log"
         env = os.environ.copy()
-        env["DADO_API_KEYS"] = API_KEY
-        env["DADO_CHECKPOINT_ROOT"] = str(tmp_path / "checkpoints")
-        env["DADO_DEVICE"] = "cpu"
+        env["LORK_API_KEYS"] = API_KEY
+        env["LORK_CHECKPOINT_ROOT"] = str(tmp_path / "checkpoints")
+        env["LORK_DEVICE"] = "cpu"
 
         with log_path.open("w", encoding="utf-8") as log_file:
             proc = subprocess.Popen(
@@ -94,7 +94,7 @@ def main() -> None:
                     sys.executable,
                     "-m",
                     "uvicorn",
-                    "dado.server.app:create_app",
+                    "lork.server.app:create_app",
                     "--factory",
                     "--host",
                     "127.0.0.1",

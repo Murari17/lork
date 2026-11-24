@@ -1,29 +1,29 @@
-"""Typed exception hierarchy for the dado Python SDK."""
+"""Typed exception hierarchy for the lork Python SDK."""
 
 from __future__ import annotations
 
 
-class DadoError(Exception):
-    """Base exception for all dado SDK errors."""
+class LorkError(Exception):
+    """Base exception for all lork SDK errors."""
 
 
-class AuthError(DadoError):
+class AuthError(LorkError):
     """Raised when authentication fails (HTTP 401)."""
 
 
-class ValidationError(DadoError):
+class ValidationError(LorkError):
     """Raised when request parameters or batch shapes are invalid (HTTP 422/403 or client-side)."""
 
 
-class SessionNotFoundError(DadoError):
+class SessionNotFoundError(LorkError):
     """Raised when a session or future does not exist or was evicted (HTTP 404)."""
 
 
-class ServerBusyError(DadoError):
+class ServerBusyError(LorkError):
     """Raised when the server is at capacity or rate-limited (HTTP 429/503)."""
 
 
-class RemoteOpError(DadoError):
+class RemoteOpError(LorkError):
     """Raised when an async server operation fails during execution."""
 
     def __init__(self, code: str, remote_message: str) -> None:
@@ -32,7 +32,7 @@ class RemoteOpError(DadoError):
         super().__init__(f"{code}: {remote_message}")
 
 
-class AmbiguousSubmissionError(DadoError):
+class AmbiguousSubmissionError(LorkError):
     """Raised when a non-idempotent POST fails after bytes may have reached the server."""
 
     def __init__(self, message: str, cause: BaseException) -> None:
@@ -40,5 +40,5 @@ class AmbiguousSubmissionError(DadoError):
         super().__init__(message)
 
 
-class DadoTimeoutError(DadoError):
+class LorkTimeoutError(LorkError):
     """Raised when waiting for an APIFuture exceeds the caller's timeout."""

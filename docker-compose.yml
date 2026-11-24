@@ -1,14 +1,14 @@
 services:
-  dado:
+  lork:
     build: .
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      DADO_API_KEYS: "${DADO_API_KEYS:?DADO_API_KEYS must be set}"
-      DADO_DEVICE: "${DADO_DEVICE:-cuda}"
-      DADO_MAX_SESSIONS: "${DADO_MAX_SESSIONS:-2}"
-      DADO_SESSION_IDLE_TTL_SECONDS: "${DADO_SESSION_IDLE_TTL_SECONDS:-1800}"
-      DADO_CHECKPOINT_ROOT: "/data/checkpoints"
+      LORK_API_KEYS: "${LORK_API_KEYS:?LORK_API_KEYS must be set}"
+      LORK_DEVICE: "${LORK_DEVICE:-cuda}"
+      LORK_MAX_SESSIONS: "${LORK_MAX_SESSIONS:-2}"
+      LORK_SESSION_IDLE_TTL_SECONDS: "${LORK_SESSION_IDLE_TTL_SECONDS:-1800}"
+      LORK_CHECKPOINT_ROOT: "/data/checkpoints"
       HF_HOME: "/cache/huggingface"
     volumes:
       - hf_cache:/cache/huggingface

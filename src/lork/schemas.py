@@ -1,4 +1,4 @@
-"""Pydantic v2 tensor and trainer validation schemas for dado."""
+"""Pydantic v2 tensor and trainer validation schemas for lork."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from dado.wire import (
+from lork.wire import (
     OptimParams,
     OptimStepRequest,
     SampleParams,

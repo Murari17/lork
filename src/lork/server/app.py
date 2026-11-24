@@ -1,4 +1,4 @@
-"""FastAPI application factory and /v1 endpoints for dado."""
+"""FastAPI application factory and /v1 endpoints for lork."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from fastapi.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from tqdm import tqdm
 
-from dado.server.futures import FutureStore
-from dado.server.models import (
+from lork.server.futures import FutureStore
+from lork.server.models import (
     CreateSessionRequest,
     ErrorDetail,
     ErrorEnvelope,
@@ -32,14 +32,14 @@ from dado.server.models import (
     ServerSettings,
     StateHttpRequest,
 )
-from dado.server.sessions import (
+from lork.server.sessions import (
     InvalidCheckpointPathError,
     SessionCapacityError,
     SessionManager,
     SessionNotFoundError,
 )
 
-logger = logging.getLogger("dado.server")
+logger = logging.getLogger("lork.server")
 
 
 class UnauthorizedError(Exception):
@@ -184,7 +184,7 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
                 )
             )
 
-    app = FastAPI(title="Dado", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Lork", version="0.1.0", lifespan=lifespan)
     app.add_middleware(_BodySizeLimitMiddleware, max_bytes=cfg.max_request_body_bytes)
 
     @app.middleware("http")

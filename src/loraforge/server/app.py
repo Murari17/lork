@@ -46,10 +46,6 @@ class UnauthorizedError(Exception):
     """Raised when Bearer authentication fails."""
 
 
-class _RequestTooLargeError(Exception):
-    """Raised when raw HTTP request body exceeds configured limit."""
-
-
 class _BodySizeLimitMiddleware:
     """ASGI middleware enforcing max_request_body_bytes before JSON parsing."""
 
@@ -77,25 +73,41 @@ class _BodySizeLimitMiddleware:
                     await resp(scope, receive, send)
                     return
 
+        chunks: list[bytes] = []
         received_bytes = 0
-
-        async def limited_receive() -> Message:
-            nonlocal received_bytes
+        more_body = True
+        while more_body:
             message = await receive()
-            if message["type"] == "http.request":
-                body_chunk = message.get("body", b"")
-                received_bytes += len(body_chunk)
-                if received_bytes > self.max_bytes:
-                    raise _RequestTooLargeError(
-                        f"Request body exceeds max_request_body_bytes={self.max_bytes}"
-                    )
-            return message
+            msg_type = message["type"]
+            if msg_type == "http.disconnect":
+                return
+            if msg_type != "http.request":
+                continue
+            body_chunk = message.get("body", b"")
+            received_bytes += len(body_chunk)
+            if received_bytes > self.max_bytes:
+                resp = _error_response(
+                    413,
+                    "request_too_large",
+                    f"Request body exceeds max_request_body_bytes={self.max_bytes}",
+                )
+                await resp(scope, receive, send)
+                return
+            if body_chunk:
+                chunks.append(body_chunk)
+            more_body = bool(message.get("more_body", False))
 
-        try:
-            await self.app(scope, limited_receive, send)
-        except _RequestTooLargeError as exc:
-            resp = _error_response(413, "request_too_large", str(exc))
-            await resp(scope, receive, send)
+        buffered = b"".join(chunks)
+        sent_to_app = False
+
+        async def replay_receive() -> Message:
+            nonlocal sent_to_app
+            if not sent_to_app:
+                sent_to_app = True
+                return {"type": "http.request", "body": buffered, "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
 
 
 def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
@@ -278,6 +290,7 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
         future = worker.submit_forward_backward(
             batch=payload.batch.model_dump(),
             loss_fn=payload.loss_fn,
+            return_logprobs=payload.return_logprobs,
         )
         return FutureSubmittedResponse(future_id=future.future_id, session_id=session_id)
 

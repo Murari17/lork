@@ -74,11 +74,12 @@ curl -s -X POST http://127.0.0.1:8000/v1/sessions/sess_.../forward_backward \
       "target_ids": [[2, 3, 4, 5]],
       "weights": [[1.0, 1.0, 1.0, 1.0]]
     },
-    "loss_fn": "cross_entropy"
+    "loss_fn": "cross_entropy",
+    "return_logprobs": true
   }'
 ```
 
-Future result:
+Future result (`return_logprobs: false` omits `"logprobs"`):
 ```json
 {"loss": 6.1234, "logprobs": [[-6.1, -6.2, -5.9, -6.3]]}
 ```

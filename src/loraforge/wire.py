@@ -198,6 +198,7 @@ class ForwardBackwardWireRequest(BaseModel):
 
     batch: WireBatch
     loss_fn: Literal["cross_entropy"] | list[list[float]] = "cross_entropy"
+    return_logprobs: bool = True
 
     @model_validator(mode="after")
     def _validate_loss_shape(self) -> ForwardBackwardWireRequest:
@@ -266,7 +267,7 @@ class ForwardBackwardResult(BaseModel):
     """Typed result for forward_backward future."""
 
     loss: float
-    logprobs: list[list[float]]
+    logprobs: list[list[float]] | None = None
 
 
 class OptimStepResult(BaseModel):

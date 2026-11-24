@@ -109,12 +109,17 @@ class TrainingClient:
         self,
         batch: dict[str, Any] | WireBatch,
         loss_fn: str | list[list[float]] = "cross_entropy",
+        return_logprobs: bool = True,
     ) -> APIFuture[ForwardBackwardResult]:
         """Submit forward_backward asynchronously; never retries ambiguous failures."""
         validated_batch = validate_batch(batch)
         try:
             wire_req = ForwardBackwardWireRequest.model_validate(
-                {"batch": validated_batch, "loss_fn": loss_fn}
+                {
+                    "batch": validated_batch,
+                    "loss_fn": loss_fn,
+                    "return_logprobs": return_logprobs,
+                }
             )
         except PydanticValidationError as exc:
             raise ValidationError(str(exc)) from exc

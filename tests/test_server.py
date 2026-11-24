@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -632,9 +633,13 @@ def test_ttl_eviction_does_not_evict_busy_or_queued_session(
             self: LoraTrainer,
             batch: dict[str, Any] | Any,
             loss_fn: str | torch.Tensor | list[list[float]] = "cross_entropy",
+            return_logprobs: bool = True,
         ) -> dict[str, Any]:
             time.sleep(0.45)
-            return {"loss": 1.0, "logprobs": torch.zeros((1, 6))}
+            out: dict[str, Any] = {"loss": 1.0}
+            if return_logprobs:
+                out["logprobs"] = torch.zeros((1, 6))
+            return out
 
         monkeypatch.setattr(LoraTrainer, "forward_backward", _slow_fb)
 
@@ -673,9 +678,13 @@ async def test_event_loop_responsive_during_slow_op(
         self: LoraTrainer,
         batch: dict[str, Any] | Any,
         loss_fn: str | torch.Tensor | list[list[float]] = "cross_entropy",
+        return_logprobs: bool = True,
     ) -> dict[str, Any]:
         time.sleep(1.5)
-        return {"loss": 1.0, "logprobs": torch.zeros((4, 16))}
+        out: dict[str, Any] = {"loss": 1.0}
+        if return_logprobs:
+            out["logprobs"] = torch.zeros((4, 16))
+        return out
 
     monkeypatch.setattr(LoraTrainer, "forward_backward", _slow_forward_backward)
     app = create_app(_make_settings(tmp_path))
@@ -786,3 +795,44 @@ def test_request_body_size_limit_enforced_before_json_parse(tmp_path: Path) -> N
         assert resp.status_code == 413
         body = resp.json()
         assert body["error"]["code"] == "request_too_large"
+
+
+def test_request_body_size_limit_chunked_no_content_length(tmp_path: Path) -> None:
+    """Body size limit enforces cap on streaming/chunked bodies with no Content-Length."""
+    settings = _make_settings(tmp_path, max_request_body_bytes=256)
+    app = create_app(settings)
+
+    def _chunk_stream() -> Iterator[bytes]:
+        yield b'{"not_json": "'
+        yield b"a" * 200
+        yield b"b" * 200
+        yield b'"}'
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/sessions",
+            content=_chunk_stream(),
+            headers={**AUTH_HEADERS, "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 413
+        body = resp.json()
+        assert body["error"]["code"] == "request_too_large"
+
+
+def test_forward_backward_return_logprobs_false_omits_logprobs(tmp_path: Path) -> None:
+    """HTTP forward_backward with return_logprobs=false omits logprobs from future result."""
+    batch = _make_wire_batch("Omit logprobs HTTP test.", batch_size=2, seq_len=8)
+    app = create_app(_make_settings(tmp_path))
+    with TestClient(app) as client:
+        sid = _create_session(client)
+        r = client.post(
+            f"/v1/sessions/{sid}/forward_backward",
+            json={"batch": batch, "loss_fn": "cross_entropy", "return_logprobs": False},
+            headers=AUTH_HEADERS,
+        )
+        assert r.status_code == 202
+        done = _wait_future(client, r.json()["future_id"])
+        assert done["status"] == "done"
+        assert "logprobs" not in done["result"]
+        assert isinstance(done["result"]["loss"], float)
+        assert done["result"]["loss"] > 0.0

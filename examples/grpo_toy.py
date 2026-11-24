@@ -1,4 +1,4 @@
-"""Toy GRPO policy-gradient example using loraforge sample + advantage loss_fn."""
+"""Toy GRPO policy-gradient task using loraforge sample + advantage loss_fn."""
 
 from __future__ import annotations
 
@@ -55,11 +55,6 @@ def run_grpo(base_seed: int = 42) -> dict[str, object]:
             MODEL, rank=8, alpha=16.0, target_modules=["q_proj", "v_proj"]
         ) as tc,
     ):
-        init_completions, _ = _sample_group(tc, base_seed + 100_000)
-        initial_rewards = [_reward(c) for c in init_completions]
-        initial_mean_reward = sum(initial_rewards) / len(initial_rewards)
-        print(f"base_seed={base_seed} initial_mean_reward={initial_mean_reward:.3f}")
-
         skipped_steps = 0
         step_rewards: list[float] = []
         for step in range(NUM_STEPS):
@@ -73,7 +68,7 @@ def run_grpo(base_seed: int = 42) -> dict[str, object]:
                 skipped_steps += 1
                 print(
                     f"step={step + 1:02d} mean_reward={mean_r:.3f} "
-                    "(skipped: all-zero advantages)"
+                    "(skipped: saturation / all-zero advantages)"
                 )
                 continue
 
@@ -111,10 +106,15 @@ def run_grpo(base_seed: int = 42) -> dict[str, object]:
             tc.forward_backward(batch, loss_fn=advantages).result()
             tc.optim_step(OptimParams(lr=1e-3)).result()
 
-        final_completions, _ = _sample_group(tc, base_seed + 200_000)
+        # Measure initial reward identically via step 1 (pre-update) and final reward post-step-12.
+        initial_mean_reward = step_rewards[0]
+        final_completions, _ = _sample_group(tc, base_seed + NUM_STEPS * 1000)
         final_rewards = [_reward(c) for c in final_completions]
         final_mean_reward = sum(final_rewards) / len(final_rewards)
-        print(f"final_mean_reward={final_mean_reward:.3f} skipped_steps={skipped_steps}")
+        print(
+            f"base_seed={base_seed} initial_mean_reward={initial_mean_reward:.3f} "
+            f"final_mean_reward={final_mean_reward:.3f} skipped_steps={skipped_steps}"
+        )
 
         summary: dict[str, object] = {
             "base_seed": base_seed,

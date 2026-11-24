@@ -164,6 +164,7 @@ class LoraTrainer:
         self,
         batch: dict[str, Any] | ForwardBackwardBatch,
         loss_fn: str | torch.Tensor | list[list[float]] = "cross_entropy",
+        return_logprobs: bool = True,
     ) -> dict[str, Any]:
         """Run forward and backward pass, accumulating gradients without stepping weights."""
         validated_batch = (
@@ -203,10 +204,10 @@ class LoraTrainer:
         self._accum_weight_sum += float(weight_sum.item())
         batch_mean_loss = float((loss_sum.detach() / weight_sum.detach()).item())
 
-        return {
-            "loss": batch_mean_loss,
-            "logprobs": token_logprobs.detach(),
-        }
+        out: dict[str, Any] = {"loss": batch_mean_loss}
+        if return_logprobs:
+            out["logprobs"] = token_logprobs.detach()
+        return out
 
     def optim_step(
         self,

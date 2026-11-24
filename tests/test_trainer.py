@@ -628,3 +628,21 @@ def test_cuda_bfloat16_training_and_save_load(model_name: str, tmp_path: Path) -
     l1_resumed = resumed.forward_backward(batch, loss_fn="cross_entropy")["loss"]
     assert l1 < l0
     assert l1_resumed == l1
+
+
+def test_forward_backward_return_logprobs_false(model_name: str, test_device: str) -> None:
+    """forward_backward(..., return_logprobs=False) omits logprobs and matches loss."""
+    trainer = LoraTrainer(
+        base_model=model_name,
+        rank=4,
+        alpha=8,
+        target_modules=TARGET_MODULES,
+        device=test_device,
+    )
+    batch = _make_toy_batch(model_name, "Omit logprobs test.", batch_size=2, seq_len=8)
+    with_lp = trainer.forward_backward(batch, loss_fn="cross_entropy", return_logprobs=True)
+    without_lp = trainer.forward_backward(batch, loss_fn="cross_entropy", return_logprobs=False)
+
+    assert "logprobs" in with_lp
+    assert "logprobs" not in without_lp
+    assert without_lp["loss"] == with_lp["loss"]

@@ -146,15 +146,18 @@ class SessionWorker:
         self,
         batch: dict[str, Any],
         loss_fn: str | list[list[float]],
+        return_logprobs: bool = True,
     ) -> FutureRecord:
         def _op() -> dict[str, Any]:
             trainer = self._require_trainer()
-            result = trainer.forward_backward(batch=batch, loss_fn=loss_fn)
-            logprobs_tensor: torch.Tensor = result["logprobs"]
-            return {
-                "loss": float(result["loss"]),
-                "logprobs": logprobs_tensor.cpu().tolist(),
-            }
+            result = trainer.forward_backward(
+                batch=batch, loss_fn=loss_fn, return_logprobs=return_logprobs
+            )
+            out: dict[str, Any] = {"loss": float(result["loss"])}
+            if return_logprobs:
+                logprobs_tensor: torch.Tensor = result["logprobs"]
+                out["logprobs"] = logprobs_tensor.cpu().tolist()
+            return out
 
         return self.submit(_op)
 

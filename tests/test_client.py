@@ -809,3 +809,21 @@ def test_examples_grpo_toy_improves_reward(live_server: str) -> None:
     assert summary_lines, f"Missing GRPO_SUMMARY line in:\n{res.stdout}"
     summary = json.loads(summary_lines[-1].removeprefix("GRPO_SUMMARY "))
     assert summary["final_mean_reward"] >= summary["initial_mean_reward"] + 0.2
+
+
+def test_sdk_forward_backward_return_logprobs_false(live_server: str) -> None:
+    """SDK forward_backward(..., return_logprobs=False) returns logprobs=None."""
+    batch = _make_wire_batch("SDK return_logprobs=False test.", batch_size=2, seq_len=8)
+    with (
+        ServiceClient(base_url=live_server, api_key=API_KEY) as client,
+        client.create_training_client(
+            base_model=MODEL_NAME,
+            rank=4,
+            alpha=8.0,
+            target_modules=TARGET_MODULES,
+            device="cpu",
+        ) as tc,
+    ):
+        res = tc.forward_backward(batch, loss_fn="cross_entropy", return_logprobs=False).result()
+        assert res.loss > 0.0
+        assert res.logprobs is None

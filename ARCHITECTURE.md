@@ -21,6 +21,7 @@ loraforge/
 ├── docs/
 │   ├── api.md                       # HTTP /v1 endpoint reference with curl examples
 │   ├── retries.md                   # Client retry & exception mapping table
+│   ├── benchmark.md                 # Benchmark methodology, 8.4e-5 deviation analysis, p50/p95 latencies & payload sizes
 │   ├── benchmark.json               # Measured 20-step HTTP vs direct PEFT+AdamW benchmark
 │   └── loss_curves.png              # Loss curve plot
 ├── examples/
@@ -86,5 +87,5 @@ loraforge/
 ## Phase 4: Launch Hardening
 
 - **`dtype` & CUDA Mixed Precision**: `TrainerInitConfig` and `CreateSessionRequest` accept `dtype: Literal["float32", "bfloat16", "float16"] | None`. Defaults to `"bfloat16"` on CUDA devices supporting bf16 and `"float32"` on CPU/MPS; rejects `"float16"` on CPU. Base weights use the selected dtype while LoRA adapters, `AdamW` state, and loss computation remain `float32`.
-- **Server Safety Defaults**: Refuses startup without `LORAFORGE_API_KEYS` (no default key), defaults `host` to `127.0.0.1`, enables zero CORS headers, and enforces `max_request_body_bytes` (default `10 MiB`) in raw ASGI middleware `_BodySizeLimitMiddleware` before JSON parsing (`413`).
-- **Release & Tooling**: `Apache-2.0` `LICENSE`, `CHANGELOG.md`, `dist/` wheel + sdist build, `scripts/gpu_check.py`, `scripts/benchmark.py`, `Dockerfile` + `docker-compose.yml`, `.github/workflows/ci.yml`, `docs/api.md`, `docs/retries.md`, and `examples/colab_quickstart.ipynb`.
+- **Server Safety Defaults**: Refuses startup without `LORAFORGE_API_KEYS` (no default key), defaults `host` to `127.0.0.1`, enables zero CORS headers, and enforces `max_request_body_bytes` (default `10 MiB`) in raw ASGI middleware `_BodySizeLimitMiddleware` on both `Content-Length` and chunked/streaming bodies before JSON parsing (`413`). `forward_backward` supports `return_logprobs: bool = True` to omit per-token logprobs when unused.
+- **Release & Tooling**: `Apache-2.0` `LICENSE`, `CHANGELOG.md`, `dist/` wheel + sdist build, `scripts/gpu_check.py`, `scripts/benchmark.py`, `Dockerfile` + `docker-compose.yml`, `.github/workflows/ci.yml`, `docs/api.md`, `docs/retries.md`, `docs/benchmark.md`, and `examples/colab_quickstart.ipynb`.

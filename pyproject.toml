@@ -9,7 +9,7 @@ description = "Open-source LoRA fine-tuning service with low-level async executi
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
-authors = [{ name = "Lork contributors" }]
+authors = [{ name = "Murari" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -35,9 +35,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lork/lork"
-Repository = "https://github.com/lork/lork"
-Documentation = "https://github.com/lork/lork/tree/main/docs"
+Homepage = "https://github.com/Murari17/lork"
+Repository = "https://github.com/Murari17/lork"
+Documentation = "https://github.com/Murari17/lork/tree/main/docs"
 
 [project.optional-dependencies]
 server = [

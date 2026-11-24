@@ -1,24 +1,26 @@
 # loraforge
 
-Open-source LoRA fine-tuning service with low-level training primitives. You own the training loop, dataset, and loss; the server owns execution only.
+Open-source, self-hosted LoRA fine-tuning execution service built around low-level primitives. **You own the training loop, dataset, and loss function; the server owns execution only.**
 
-## Install
+## Why loraforge?
 
-Lightweight Python SDK only (`httpx` + `pydantic`, no `torch` / `transformers` / `peft`):
+Most fine-tuning frameworks wrap data loading, trainer loops, and loss definitions inside opinionated abstractions that break as soon as you need custom RL/GRPO objectives, non-uniform per-token weighting, or custom gradient accumulation schedules. `loraforge` exposes only the core execution primitives over an async future-based HTTP API and a lightweight Python SDK (`httpx` + `pydantic`, no `torch` required on the client).
 
+## 60-Second Quickstart
+
+### 1. Install
+
+Lightweight Python SDK only (no `torch`, `transformers`, or `peft`):
 ```bash
 pip install loraforge
 ```
 
 Server + trainer runtime (`torch`, `transformers`, `peft`, `fastapi`, `uvicorn`):
-
 ```bash
 pip install "loraforge[server]"
 ```
 
-## Start the Server
-
-> **Memory note**: In the current phase, each active session holds an independent `fp32` `LoraTrainer` instance (`~2 GB` RAM per `Qwen/Qwen2.5-0.5B` session). `LORAFORGE_MAX_SESSIONS` defaults to `2`.
+### 2. Start the Server
 
 ```bash
 export LORAFORGE_API_KEYS="dev-secret-key"
@@ -26,7 +28,7 @@ export LORAFORGE_DEVICE="cpu"   # or cuda / mps
 uvicorn loraforge.server.app:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-## 5-Line Client Example
+### 3. Run Training via the SDK (5 Lines)
 
 ```python
 from loraforge.client import OptimParams, ServiceClient
@@ -38,11 +40,66 @@ with ServiceClient("http://127.0.0.1:8000", "dev-secret-key") as client, \
     print(f"step={step} loss={loss:.4f}")
 ```
 
-## Run the Examples
+## Primitives
 
-Against a running server (`LORAFORGE_BASE_URL` and `LORAFORGE_API_KEY`):
+| Primitive | Description |
+| :--- | :--- |
+| `create_training_client(base_model, rank, alpha, target_modules, device, dtype)` | Initializes a dedicated session worker thread with frozen base weights and `fp32` LoRA adapters. |
+| `forward_backward(batch, loss_fn)` | Accumulates weighted gradients across micro-batches without stepping weights; supports `"cross_entropy"` or precomputed per-token advantages. |
+| `optim_step(OptimParams(...))` | Normalizes accumulated gradients by window weight, steps `AdamW`, zeros gradients. Idempotent on SDK-generated `step_id`. |
+| `sample(prompts, SampleParams(...))` | Autoregressive generation returning completions, token IDs, and per-token log-probabilities (optional per-call `seed`). |
+| `save_state(name)` / `load_state(name)` | Persists and restores LoRA weights (`safetensors`) and full `AdamW` optimizer state. |
+| `close()` / context manager | Deletes the remote session, frees trainer memory, and empties device caches. |
+
+## Examples
+
+Run against a running server (`LORAFORGE_BASE_URL` and `LORAFORGE_API_KEY`):
 
 ```bash
+# Supervised fine-tuning (~30 lines, Qwen/Qwen2.5-0.5B)
 LORAFORGE_BASE_URL=http://127.0.0.1:8000 LORAFORGE_API_KEY=dev-secret-key python examples/sft.py
-LORAFORGE_BASE_URL=http://127.0.0.1:8000 LORAFORGE_API_KEY=dev-secret-key python examples/grpo_toy.py
+
+# Toy GRPO RL loop (sample -> reward -> advantages -> forward_backward -> optim_step)
+LORAFORGE_BASE_URL=http://127.0.0.1:8000 LORAFORGE_API_KEY=dev-secret-key python examples/grpo_toy.py 42
 ```
+
+### Measured 5-Seed GRPO Results (`examples/grpo_toy.py`, `Qwen/Qwen2.5-0.5B`, CPU `fp32`, 12 steps, `GROUP_SIZE=8`)
+
+| Base Seed | Initial Mean Reward | Final Mean Reward | Skipped Steps (All-Zero Adv.) | Per-Step Mean Rewards (`step 1..12`) |
+| :--- | :--- | :--- | :--- | :--- |
+| `42` | `0.000` | `1.000` | `8` | `0.125, 0.375, 0.750, 1.000, 0.875, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000` |
+| `43` | `0.125` | `1.000` | `9` | `0.125, 0.750, 0.750, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000` |
+| `44` | `0.125` | `1.000` | `9` | `0.125, 0.875, 0.750, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000` |
+| `45` | `0.125` | `1.000` | `8` | `0.125, 0.375, 0.750, 1.000, 1.000, 1.000, 0.875, 1.000, 1.000, 1.000, 1.000, 1.000` |
+| `46` | `0.125` | `1.000` | `9` | `0.125, 0.750, 0.750, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000` |
+
+## Benchmark (SDK over HTTP vs. Plain `PEFT + AdamW`)
+
+Measured via [scripts/benchmark.py](scripts/benchmark.py) on CPU `float32` (`Qwen/Qwen2.5-0.5B`, 20 steps, `batch_size=2`, `seq_len=12`, `480` total tokens — see [docs/benchmark.json](docs/benchmark.json) and [docs/loss_curves.png](docs/loss_curves.png)):
+- **Plain `PEFT + AdamW`**: `4.5997s` (`104.35 tokens/sec`)
+- **`loraforge` SDK over HTTP**: `5.5380s` (`86.67 tokens/sec`)
+- **HTTP overhead**: `16.94%`
+- **Max per-step loss deviation**: `8.39e-05`
+
+## Docker (CUDA Runtime)
+
+```bash
+export LORAFORGE_API_KEYS="your-secret-key"
+docker compose up --build
+```
+
+> Note: `Dockerfile` targets `nvidia/cuda:12.4.1-runtime-ubuntu22.04` as a non-root user (`loraforge`) with `/cache/huggingface` and `/data/checkpoints` volumes.
+
+## Honest Limits
+
+- **Self-hosted / single-tenant**: Static Bearer API keys (`LORAFORGE_API_KEYS`) with no multi-tenant isolation or user billing.
+- **No shared base model**: Each active session loads its own base model instance (`~2 GB` RAM per `fp32` `Qwen/Qwen2.5-0.5B` session; `LORAFORGE_MAX_SESSIONS` defaults to `2`).
+- **Single-node execution**: One worker thread per session on a single server process (no distributed tensor/data parallelism).
+
+## Docs
+
+- [HTTP API Reference](docs/api.md)
+- [Client Retry & Failure Semantics](docs/retries.md)
+- [Architecture](ARCHITECTURE.md)
+- [GPU Check Script](scripts/gpu_check.py)
+- [Colab Quickstart Notebook](examples/colab_quickstart.ipynb)

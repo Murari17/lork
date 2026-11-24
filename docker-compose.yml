@@ -1,0 +1,32 @@
+services:
+  loraforge:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      LORAFORGE_API_KEYS: "${LORAFORGE_API_KEYS:?LORAFORGE_API_KEYS must be set}"
+      LORAFORGE_DEVICE: "${LORAFORGE_DEVICE:-cuda}"
+      LORAFORGE_MAX_SESSIONS: "${LORAFORGE_MAX_SESSIONS:-2}"
+      LORAFORGE_SESSION_IDLE_TTL_SECONDS: "${LORAFORGE_SESSION_IDLE_TTL_SECONDS:-1800}"
+      LORAFORGE_CHECKPOINT_ROOT: "/data/checkpoints"
+      HF_HOME: "/cache/huggingface"
+    volumes:
+      - hf_cache:/cache/huggingface
+      - checkpoints:/data/checkpoints
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  hf_cache:
+  checkpoints:

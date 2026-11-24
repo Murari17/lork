@@ -739,3 +739,50 @@ async def test_event_loop_responsive_during_slow_op(
                 headers=AUTH_HEADERS,
             )
             assert done.json()["status"] == "done"
+
+
+def test_server_refuses_start_without_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ServerSettings.from_env and create_app refuse to start without LORAFORGE_API_KEYS."""
+    monkeypatch.delenv("LORAFORGE_API_KEYS", raising=False)
+    with pytest.raises(ValueError, match="LORAFORGE_API_KEYS"):
+        ServerSettings.from_env()
+    with pytest.raises(ValueError, match="LORAFORGE_API_KEYS"):
+        create_app()
+
+    monkeypatch.setenv("LORAFORGE_API_KEYS", "   ,  ")
+    with pytest.raises(ValueError, match="LORAFORGE_API_KEYS"):
+        create_app()
+
+
+def test_server_defaults_bind_localhost_and_no_cors(tmp_path: Path) -> None:
+    """Server defaults host to 127.0.0.1 and does not enable CORS headers."""
+    settings = ServerSettings(
+        api_keys=(API_KEY,),
+        checkpoint_root=tmp_path / "checkpoints",
+    )
+    assert settings.host == "127.0.0.1"
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        resp = client.get(
+            "/v1/healthz",
+            headers={"Origin": "https://evil.example"},
+        )
+        assert resp.status_code == 200
+        assert "access-control-allow-origin" not in {k.lower() for k in resp.headers}
+
+
+def test_request_body_size_limit_enforced_before_json_parse(tmp_path: Path) -> None:
+    """Body size limit rejects oversized payloads (even invalid JSON) with 413 before parsing."""
+    settings = _make_settings(tmp_path, max_request_body_bytes=256)
+    app = create_app(settings)
+    with TestClient(app) as client:
+        oversized_malformed = b"{not-json" + b"x" * 300
+        resp = client.post(
+            "/v1/sessions",
+            content=oversized_malformed,
+            headers={**AUTH_HEADERS, "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 413
+        body = resp.json()
+        assert body["error"]["code"] == "request_too_large"

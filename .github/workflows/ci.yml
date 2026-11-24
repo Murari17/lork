@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-type:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: python -m pip install --upgrade pip && pip install ".[server,dev]"
+      - run: ruff check .
+      - run: mypy --strict src
+
+  fast-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: python -m pip install --upgrade pip && pip install ".[dev]"
+      - name: Verify client imports without torch/transformers/peft
+        run: |
+          python -c "
+          import sys
+          for m in ('torch', 'transformers', 'peft'):
+              sys.modules[m] = None
+          import loraforge
+          import loraforge.client
+          from loraforge.wire import OptimParams, SampleParams, WireBatch
+          b = WireBatch(input_ids=[[1, 2]], target_ids=[[2, 3]], weights=[[1.0, 1.0]])
+          assert b.shape == (1, 2)
+          assert OptimParams(lr=1e-3).eps == 1e-8
+          assert SampleParams(max_tokens=4, seed=42).seed == 42
+          print('fast client/wire check ok')
+          "
+
+  full-cpu-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-qwen2.5-0.5b-${{ runner.os }}
+      - run: python -m pip install --upgrade pip && pip install ".[server,dev]"
+      - name: Pre-cache Qwen/Qwen2.5-0.5B if not restored
+        run: |
+          python -c "
+          from transformers import AutoModelForCausalLM, AutoTokenizer
+          AutoTokenizer.from_pretrained('Qwen/Qwen2.5-0.5B')
+          AutoModelForCausalLM.from_pretrained('Qwen/Qwen2.5-0.5B')
+          "
+      - run: pytest -x -q -m "not slow and not gpu"
+
+  wheel-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: python -m pip install --upgrade pip && pip install ".[dev]"
+      - run: python -m build
+      - name: Verify clean-venv client and server wheel installs
+        run: |
+          python -m venv /tmp/v_client
+          /tmp/v_client/bin/pip install dist/*.whl
+          /tmp/v_client/bin/python -c "import loraforge.client, sys; assert 'torch' not in sys.modules; print('client wheel ok')"
+          python -m venv /tmp/v_server
+          /tmp/v_server/bin/pip install "dist/$(ls dist/*.whl | xargs -n1 basename)[server]"
+          /tmp/v_server/bin/python -c "import loraforge.server; print('server wheel ok')"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import torch
 import torch.nn.functional as F
@@ -40,6 +40,30 @@ def _ensure_device_available(device_str: str) -> torch.device:
     return torch.device(device_str)
 
 
+_DTYPE_MAP: dict[str, torch.dtype] = {
+    "float32": torch.float32,
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+}
+
+
+def _resolve_dtype(
+    device_str: str,
+    dtype: Literal["float32", "bfloat16", "float16"] | None,
+) -> tuple[Literal["float32", "bfloat16", "float16"], torch.dtype]:
+    if dtype is None:
+        if (
+            device_str.startswith("cuda")
+            and torch.cuda.is_available()
+            and torch.cuda.is_bf16_supported()
+        ):
+            return "bfloat16", torch.bfloat16
+        return "float32", torch.float32
+    if dtype == "float16" and device_str == "cpu":
+        raise ValueError("float16 is not supported on CPU; use float32 or bfloat16")
+    return dtype, _DTYPE_MAP[dtype]
+
+
 def _move_optimizer_state_to_cpu(state_dict: dict[str, Any]) -> dict[str, Any]:
     copied_state: dict[Any, dict[str, Any]] = {}
     for key, entry in state_dict["state"].items():
@@ -66,6 +90,7 @@ class LoraTrainer:
         alpha: float,
         target_modules: list[str],
         device: str = "cpu",
+        dtype: Literal["float32", "bfloat16", "float16"] | None = None,
     ) -> None:
         cfg = TrainerInitConfig(
             base_model=base_model,
@@ -73,15 +98,17 @@ class LoraTrainer:
             alpha=alpha,
             target_modules=target_modules,
             device=device,
+            dtype=dtype,
         )
         self.device: torch.device = _ensure_device_available(cfg.device)
+        self.dtype_name, self.torch_dtype = _resolve_dtype(cfg.device, cfg.dtype)
         self.config: TrainerInitConfig = cfg
 
         self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(cfg.base_model)
         if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        base = AutoModelForCausalLM.from_pretrained(cfg.base_model, dtype=torch.float32)
+        base = AutoModelForCausalLM.from_pretrained(cfg.base_model, dtype=self.torch_dtype)
         for param in base.parameters():
             param.requires_grad_(False)
 
@@ -96,9 +123,14 @@ class LoraTrainer:
             lora_dropout=0.0,
             bias="none",
         )
-        peft_model: PeftModel | PeftMixedModel = get_peft_model(base, lora_config)
+        peft_model: PeftModel | PeftMixedModel = get_peft_model(
+            base, lora_config, autocast_adapter_dtype=True
+        )
         self.model: PeftModel | PeftMixedModel = peft_model.to(self.device)
         self.model.train()
+        for param in self.model.parameters():
+            if param.requires_grad and param.dtype != torch.float32:
+                param.data = param.data.to(dtype=torch.float32)
 
         trainable_names_and_params = [
             (name, param)
@@ -328,7 +360,12 @@ class LoraTrainer:
                 f"{adapter_file.name} and {state_file.name}"
             )
 
-        adapter_sd = load_safetensors(str(adapter_file), device=str(self.device))
+        adapter_sd = {
+            name: tensor.to(dtype=torch.float32)
+            for name, tensor in load_safetensors(
+                str(adapter_file), device=str(self.device)
+            ).items()
+        }
         set_peft_model_state_dict(self.model, adapter_sd)
 
         state_bundle: dict[str, Any] = torch.load(

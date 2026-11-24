@@ -560,3 +560,71 @@ def test_pydantic_input_validation_errors(model_name: str, test_device: str) -> 
 
     with pytest.raises(ValidationError):
         trainer.sample([], {"max_tokens": 4, "temperature": 0.0})
+
+
+def test_float16_rejected_on_cpu(model_name: str) -> None:
+    """Explicit float16 dtype on CPU raises a clear ValueError."""
+    with pytest.raises(ValueError, match="float16 is not supported on CPU"):
+        LoraTrainer(
+            base_model=model_name,
+            rank=4,
+            alpha=8,
+            target_modules=TARGET_MODULES,
+            device="cpu",
+            dtype="float16",
+        )
+
+
+def test_default_dtype_float32_on_cpu(model_name: str) -> None:
+    """Default dtype on CPU is float32 for both base and LoRA weights."""
+    trainer = LoraTrainer(
+        base_model=model_name,
+        rank=4,
+        alpha=8,
+        target_modules=TARGET_MODULES,
+        device="cpu",
+    )
+    assert trainer.dtype_name == "float32"
+    assert trainer.torch_dtype == torch.float32
+    assert all(p.dtype == torch.float32 for p in trainer.model.parameters())
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_cuda_bfloat16_training_and_save_load(model_name: str, tmp_path: Path) -> None:
+    """On CUDA, default dtype is bf16 base with fp32 LoRA/AdamW and loss decreases."""
+    torch.manual_seed(42)
+    trainer = LoraTrainer(
+        base_model=model_name,
+        rank=4,
+        alpha=8,
+        target_modules=TARGET_MODULES,
+        device="cuda",
+    )
+    if torch.cuda.is_bf16_supported():
+        assert trainer.dtype_name == "bfloat16"
+        base_dtypes = {p.dtype for p in trainer.model.parameters() if not p.requires_grad}
+        assert base_dtypes == {torch.bfloat16}
+    lora_dtypes = {p.dtype for p in trainer.model.parameters() if p.requires_grad}
+    assert lora_dtypes == {torch.float32}
+
+    batch = _make_toy_batch(
+        model_name, "CUDA bfloat16 LoRA training check.", batch_size=2, seq_len=8
+    )
+    l0 = trainer.forward_backward(batch, loss_fn="cross_entropy")["loss"]
+    trainer.optim_step("cuda-0", {"lr": 5e-4})
+    ckpt = tmp_path / "cuda_ckpt"
+    trainer.save_state(ckpt)
+    l1 = trainer.forward_backward(batch, loss_fn="cross_entropy")["loss"]
+
+    resumed = LoraTrainer(
+        base_model=model_name,
+        rank=4,
+        alpha=8,
+        target_modules=TARGET_MODULES,
+        device="cuda",
+    )
+    resumed.load_state(ckpt)
+    l1_resumed = resumed.forward_backward(batch, loss_fn="cross_entropy")["loss"]
+    assert l1 < l0
+    assert l1_resumed == l1

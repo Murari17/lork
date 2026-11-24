@@ -10,15 +10,27 @@
 
 ```text
 loraforge/
-├── pyproject.toml                   # Split client deps (httpx, pydantic) vs [server] & [dev] extras
+├── pyproject.toml                   # Split client deps vs [server] & [dev] extras, release metadata
+├── LICENSE                          # Apache-2.0
+├── CHANGELOG.md                     # Release history
+├── Dockerfile & docker-compose.yml  # CUDA 12.4 runtime container (unbuilt locally without Docker)
+├── .github/workflows/ci.yml         # CI: lint+type, fast no-torch tests, full CPU tests, wheel check
 ├── AGENTS.md                        # Project spec & hard rules 1-11
 ├── ARCHITECTURE.md                  # Architecture & phase documentation
-├── README.md                        # Quickstart guide
+├── README.md                        # Quickstart, benchmarks, examples, limits
+├── docs/
+│   ├── api.md                       # HTTP /v1 endpoint reference with curl examples
+│   ├── retries.md                   # Client retry & exception mapping table
+│   ├── benchmark.json               # Measured 20-step HTTP vs direct PEFT+AdamW benchmark
+│   └── loss_curves.png              # Loss curve plot
 ├── examples/
 │   ├── sft.py                       # ~30-line SFT example via ServiceClient
-│   └── grpo_toy.py                  # Toy GRPO RL loop via sample + advantage loss_fn
+│   ├── grpo_toy.py                  # Deterministic GRPO RL loop via sample(seed=...) + advantage loss
+│   └── colab_quickstart.ipynb       # Colab GPU notebook
 ├── scripts/
-│   └── smoke_http.py                # Real-uvicorn 20-step HTTP SFT smoke script
+│   ├── smoke_http.py                # Real-uvicorn 20-step HTTP SFT smoke script
+│   ├── gpu_check.py                 # CUDA bf16 verification script
+│   └── benchmark.py                 # Live HTTP vs plain PEFT+AdamW benchmark
 ├── src/loraforge/
 │   ├── __init__.py                  # Eager wire exports; lazy __getattr__ for LoraTrainer
 │   ├── py.typed                     # PEP 561 type marker
@@ -27,6 +39,7 @@ loraforge/
 │   ├── trainer.py                   # LoraTrainer core execution class
 │   ├── client/
 │   │   ├── __init__.py              # Public Python SDK exports
+│   │   ├── py.typed                 # PEP 561 marker for client package
 │   │   ├── exceptions.py            # Typed SDK exception hierarchy
 │   │   ├── futures.py               # Long-polling APIFuture[T]
 │   │   └── client.py                # ServiceClient, TrainingClient, batch validator, retries
@@ -35,11 +48,11 @@ loraforge/
 │       ├── models.py                # ServerSettings & limit-checked HTTP wrappers
 │       ├── futures.py               # Bounded FutureStore & long-poll FutureRecord
 │       ├── sessions.py              # Per-session FIFO worker threads & TTL SessionManager
-│       └── app.py                   # FastAPI application factory, auth, logging, /v1 routes
+│       └── app.py                   # FastAPI application factory, body limit, auth, logging, /v1 routes
 └── tests/
     ├── conftest.py                  # Shared model/device fixtures + HF_HUB_OFFLINE=1
-    ├── test_trainer.py              # Phase 1 verification suite
-    ├── test_server.py               # Phase 2 async HTTP server verification suite
+    ├── test_trainer.py              # Phase 1 + dtype/GPU verification suite
+    ├── test_server.py               # Phase 2 + safety defaults verification suite
     └── test_client.py               # Phase 3 live-server SDK & examples verification suite
 ```
 
@@ -47,14 +60,11 @@ loraforge/
 
 ## Phase 1: `LoraTrainer` Core
 
-### 1. Input Validation (`src/loraforge/schemas.py` & `src/loraforge/wire.py`)
-- Pure-Pydantic configuration and wire schemas live in `src/loraforge/wire.py` with zero heavy ML imports (`TrainerInitConfig`, `OptimParams`, `SampleParams`, `WireBatch`, etc.).
-- `src/loraforge/schemas.py` adds `torch.Tensor` validation (`ForwardBackwardBatch`, `AdvantageLossInput`, `validate_loss_fn`) and re-exports the shared `wire.py` models.
-
-### 2. `LoraTrainer` (`src/loraforge/trainer.py`)
-- Loads causal LM in `torch.float32`, freezes all base parameters, injects LoRA adapters, and optimizes only `lora_` parameters with `AdamW`.
-- Backpropagates unnormalized weighted token losses and divides accumulated gradients by total accumulated window weight at `optim_step`.
-- Tracks `_applied_steps` for idempotent `optim_step`, KV-cached `sample()`, and `save_state()` / `load_state()` for bit-identical resume.
+- **Input Validation (`src/loraforge/schemas.py` & `src/loraforge/wire.py`)**: Pure-Pydantic configuration and wire schemas live in `wire.py` with zero heavy ML imports. `schemas.py` validates `torch.Tensor` batches and precomputed advantage tensors.
+- **Execution (`src/loraforge/trainer.py`)**:
+  - Loads causal LM in the resolved `dtype`, freezes base weights, injects LoRA adapters (`autocast_adapter_dtype=True`), and keeps trainable LoRA parameters and `AdamW` optimizer state in `torch.float32`.
+  - Computes per-token log-probabilities and loss in `torch.float32`, backpropagates unnormalized weighted token losses, and divides accumulated gradients by total accumulated window weight at `optim_step`.
+  - Tracks `_applied_steps` for idempotent `optim_step`, supports KV-cached `sample()` with optional per-call `torch.Generator` seeding (`SampleParams.seed`), and persists/restores weights + `AdamW` state via `save_state()` / `load_state()`.
 
 ---
 
@@ -62,20 +72,19 @@ loraforge/
 
 - **Non-blocking event loop**: Mutating endpoints return `202 Accepted` (`{"future_id", "session_id"}`); `LoraTrainer` initialization and execution run strictly on per-session FIFO worker threads (`SessionWorker`).
 - **Fault isolation & idempotency**: Worker exceptions map to `status="error"` futures without poisoning subsequent ops; `SessionWorker` caches `optim_step` results by `step_id` across subsequent failures.
-- **Security & Limits**: `Bearer` auth via `hmac.compare_digest`, env-configurable `ServerSettings` limits (`422` on over-limit, never truncating), symlink-safe checkpoint containment (`^[A-Za-z0-9_-]{1,64}$`), bounded `FutureStore`, idle TTL eviction (`404`), and `max_sessions` default `2` (`~2 GB` RAM per `fp32` `0.5B` session until Phase 4 shared base weights).
+- **Security & Limits**: `Bearer` auth via `hmac.compare_digest`, env-configurable `ServerSettings` limits (`422` on over-limit), symlink-safe checkpoint containment (`^[A-Za-z0-9_-]{1,64}$`), bounded `FutureStore`, idle TTL eviction (`404`), and `max_sessions` default `2` (`~2 GB` RAM per `fp32` `0.5B` session until shared base weights).
 
 ---
 
 ## Phase 3: Lightweight Python SDK & Packaging Split
 
-- **Zero-ML Client Packaging**: `pip install loraforge` installs only `httpx`, `pydantic`, and their lightweight transitive dependencies. `import loraforge` and `import loraforge.client` never import `torch`, `transformers`, or `peft` (`LoraTrainer` and `ForwardBackwardBatch` are imported lazily via `loraforge.__getattr__`).
-- **Client API (`src/loraforge/client/`)**:
-  - `ServiceClient`: manages authenticated `httpx.Client`, session creation/deletion, and retry/error mapping.
-  - `TrainingClient`: context manager deleting the session on `__exit__`; submits pipelined async operations returning `APIFuture[T]` (`forward_backward`, `optim_step`, `sample`, `save_state`, `load_state`).
-  - `APIFuture[T]`: implements `done()` and `result(timeout=None)` looping on `GET /v1/futures/{id}?wait=25` until completion or raising `LoraforgeTimeoutError` without cancelling the remote op.
-- **Correctness-Critical Retry Semantics**:
-  - Pre-send transport errors (`ConnectError`, `ConnectTimeout`, `PoolTimeout`) and `429`/`5xx` responses retry with exponential backoff + jitter, honoring numeric `Retry-After` headers.
-  - `optim_step` generates `step_id` (`uuid4`) once per call and retries safely using the identical `step_id`.
-  - Non-idempotent submissions (`forward_backward`, `sample`, `save_state`, `load_state`) **never** auto-retry after post-send transport failures (`ReadTimeout`, `ReadError`, `WriteError`, `RemoteProtocolError`), instead raising `AmbiguousSubmissionError` carrying the underlying exception.
-  - Future `GET` polling is always safely retried.
-- **Typed Exceptions**: `AuthError` (`401`), `ValidationError` (`400`/`403`/`422`/client-side batch shape), `SessionNotFoundError` (`404`), `ServerBusyError` (`429`/`503`), `RemoteOpError`, `AmbiguousSubmissionError`, `LoraforgeTimeoutError`.
+- **Zero-ML Client Packaging**: `pip install loraforge` installs only `httpx`, `pydantic`, and lightweight transitive deps. `import loraforge` and `import loraforge.client` never import `torch`, `transformers`, or `peft`.
+- **Correctness-Critical Retry Semantics**: `optim_step` (reusing identical `step_id`), `GET /v1/futures/{id}`, and `DELETE` retry on pre-send errors, `429`, and `5xx`. Non-idempotent submissions (`forward_backward`, `sample`, `save_state`, `load_state`, `create_session`) retry **only** on pre-send transport failures, `429`, or `503` with our structured `ErrorEnvelope`; any other post-send failure (including `502`/`500`/`504`/drops) raises `AmbiguousSubmissionError` without retrying.
+
+---
+
+## Phase 4: Launch Hardening
+
+- **`dtype` & CUDA Mixed Precision**: `TrainerInitConfig` and `CreateSessionRequest` accept `dtype: Literal["float32", "bfloat16", "float16"] | None`. Defaults to `"bfloat16"` on CUDA devices supporting bf16 and `"float32"` on CPU/MPS; rejects `"float16"` on CPU. Base weights use the selected dtype while LoRA adapters, `AdamW` state, and loss computation remain `float32`.
+- **Server Safety Defaults**: Refuses startup without `LORAFORGE_API_KEYS` (no default key), defaults `host` to `127.0.0.1`, enables zero CORS headers, and enforces `max_request_body_bytes` (default `10 MiB`) in raw ASGI middleware `_BodySizeLimitMiddleware` before JSON parsing (`413`).
+- **Release & Tooling**: `Apache-2.0` `LICENSE`, `CHANGELOG.md`, `dist/` wheel + sdist build, `scripts/gpu_check.py`, `scripts/benchmark.py`, `Dockerfile` + `docker-compose.yml`, `.github/workflows/ci.yml`, `docs/api.md`, `docs/retries.md`, and `examples/colab_quickstart.ipynb`.

@@ -127,6 +127,7 @@ class SessionWorker:
                 alpha=self._init_config.alpha,
                 target_modules=self._init_config.target_modules,
                 device=self._init_config.device,
+                dtype=self._init_config.dtype,
             )
             return {"session_id": self.session_id}
 

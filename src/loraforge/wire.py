@@ -32,6 +32,7 @@ class TrainerInitConfig(BaseModel):
     alpha: float = Field(..., gt=0.0)
     target_modules: list[str] = Field(..., min_length=1)
     device: str = Field(default="cpu", pattern=r"^(cpu|mps|cuda(:\d+)?)$")
+    dtype: Literal["float32", "bfloat16", "float16"] | None = None
 
     @field_validator("base_model")
     @classmethod
@@ -139,6 +140,7 @@ class CreateSessionRequest(BaseModel):
     alpha: float = Field(..., gt=0.0)
     target_modules: list[str] = Field(..., min_length=1)
     device: str | None = None
+    dtype: Literal["float32", "bfloat16", "float16"] | None = None
 
     def to_trainer_config(self, default_device: str) -> TrainerInitConfig:
         """Validate session initialization parameters via shared TrainerInitConfig."""
@@ -148,6 +150,7 @@ class CreateSessionRequest(BaseModel):
             alpha=self.alpha,
             target_modules=self.target_modules,
             device=self.device if self.device is not None else default_device,
+            dtype=self.dtype,
         )
 
 

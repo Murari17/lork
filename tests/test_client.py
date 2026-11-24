@@ -60,7 +60,9 @@ def _make_wire_batch(
     }
 
 
-def _start_uvicorn(tmp_path: Path, max_sessions: int = 2) -> tuple[subprocess.Popen[str], str]:
+def _start_uvicorn(
+    tmp_path: Path, max_sessions: int = 2
+) -> tuple[subprocess.Popen[str], str, Any]:
     port = _find_free_port()
     base_url = f"http://127.0.0.1:{port}"
     env = os.environ.copy()
@@ -73,6 +75,8 @@ def _start_uvicorn(tmp_path: Path, max_sessions: int = 2) -> tuple[subprocess.Po
     env["LORAFORGE_MAX_SEQ_LEN"] = "64"
     env["LORAFORGE_MAX_SAMPLE_TOKENS"] = "32"
 
+    log_path = tmp_path / "uvicorn.log"
+    log_file = log_path.open("w", encoding="utf-8")
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -88,7 +92,7 @@ def _start_uvicorn(tmp_path: Path, max_sessions: int = 2) -> tuple[subprocess.Po
             "warning",
         ],
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=log_file,
         stderr=subprocess.STDOUT,
         text=True,
     )
@@ -97,37 +101,44 @@ def _start_uvicorn(tmp_path: Path, max_sessions: int = 2) -> tuple[subprocess.Po
     with httpx.Client(base_url=base_url, timeout=2.0) as probe:
         while time.monotonic() < deadline:
             if proc.poll() is not None:
-                out = proc.stdout.read() if proc.stdout else ""
+                log_file.flush()
+                out = log_path.read_text(encoding="utf-8")
+                log_file.close()
                 raise RuntimeError(f"uvicorn exited early ({proc.returncode}):\n{out}")
             try:
                 if probe.get("/v1/healthz").status_code == 200:
-                    return proc, base_url
+                    return proc, base_url, log_file
             except httpx.RequestError:
                 pass
             time.sleep(0.1)
     proc.terminate()
+    log_file.close()
     raise TimeoutError("Timed out waiting for live uvicorn /v1/healthz")
 
 
-def _stop_uvicorn(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is None:
-        proc.send_signal(signal.SIGINT)
-        try:
-            proc.wait(timeout=15.0)
-        except subprocess.TimeoutExpired:
-            proc.terminate()
-            proc.wait(timeout=5.0)
+def _stop_uvicorn(proc: subprocess.Popen[str], log_file: Any = None) -> None:
+    try:
+        if proc.poll() is None:
+            proc.send_signal(signal.SIGINT)
+            try:
+                proc.wait(timeout=15.0)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                proc.wait(timeout=5.0)
+    finally:
+        if log_file is not None:
+            log_file.close()
 
 
 @pytest.fixture(scope="module")
 def live_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """Live uvicorn server subprocess shared across SDK tests."""
     tmp_dir = tmp_path_factory.mktemp("live_server")
-    proc, base_url = _start_uvicorn(tmp_dir, max_sessions=2)
+    proc, base_url, log_file = _start_uvicorn(tmp_dir, max_sessions=2)
     try:
         yield base_url
     finally:
-        _stop_uvicorn(proc)
+        _stop_uvicorn(proc, log_file)
 
 
 class FaultInjectingProxy:

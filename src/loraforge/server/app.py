@@ -16,6 +16,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Header, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from tqdm import tqdm
 
 from loraforge.server.futures import FutureStore
@@ -43,6 +44,58 @@ logger = logging.getLogger("loraforge.server")
 
 class UnauthorizedError(Exception):
     """Raised when Bearer authentication fails."""
+
+
+class _RequestTooLargeError(Exception):
+    """Raised when raw HTTP request body exceeds configured limit."""
+
+
+class _BodySizeLimitMiddleware:
+    """ASGI middleware enforcing max_request_body_bytes before JSON parsing."""
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        for header_name, header_val in scope.get("headers", ()):
+            if header_name == b"content-length":
+                try:
+                    content_len = int(header_val.decode("latin-1"))
+                except ValueError:
+                    break
+                if content_len > self.max_bytes:
+                    resp = _error_response(
+                        413,
+                        "request_too_large",
+                        f"Request body {content_len} bytes exceeds limit={self.max_bytes}",
+                    )
+                    await resp(scope, receive, send)
+                    return
+
+        received_bytes = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received_bytes
+            message = await receive()
+            if message["type"] == "http.request":
+                body_chunk = message.get("body", b"")
+                received_bytes += len(body_chunk)
+                if received_bytes > self.max_bytes:
+                    raise _RequestTooLargeError(
+                        f"Request body exceeds max_request_body_bytes={self.max_bytes}"
+                    )
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _RequestTooLargeError as exc:
+            resp = _error_response(413, "request_too_large", str(exc))
+            await resp(scope, receive, send)
 
 
 def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
@@ -120,6 +173,7 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
             )
 
     app = FastAPI(title="loraforge", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(_BodySizeLimitMiddleware, max_bytes=cfg.max_request_body_bytes)
 
     @app.middleware("http")
     async def structured_logging_middleware(

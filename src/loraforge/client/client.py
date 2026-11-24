@@ -6,7 +6,7 @@ import logging
 import random
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import ValidationError as PydanticValidationError
@@ -257,6 +257,7 @@ class ServiceClient:
         alpha: float,
         target_modules: list[str],
         device: str | None = None,
+        dtype: Literal["float32", "bfloat16", "float16"] | None = None,
     ) -> TrainingClient:
         """Create a remote training session, await initialization, and return TrainingClient."""
         try:
@@ -266,6 +267,7 @@ class ServiceClient:
                 alpha=alpha,
                 target_modules=target_modules,
                 device=device,
+                dtype=dtype,
             )
             req.to_trainer_config(default_device=device or "cpu")
         except PydanticValidationError as exc:

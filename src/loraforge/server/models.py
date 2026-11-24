@@ -40,6 +40,8 @@ class ServerSettings(BaseModel):
     future_ttl_seconds: float = Field(default=3600.0, gt=0.0)
     checkpoint_root: Path = Path("checkpoints")
     default_device: str = Field(default="cpu", pattern=r"^(cpu|mps|cuda(:\d+)?)$")
+    host: str = Field(default="127.0.0.1", min_length=1)
+    max_request_body_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
 
     @field_validator("api_keys")
     @classmethod
@@ -74,6 +76,10 @@ class ServerSettings(BaseModel):
             ),
             checkpoint_root=Path(os.environ.get("LORAFORGE_CHECKPOINT_ROOT", "checkpoints")),
             default_device=os.environ.get("LORAFORGE_DEVICE", "cpu"),
+            host=os.environ.get("LORAFORGE_HOST", "127.0.0.1"),
+            max_request_body_bytes=int(
+                os.environ.get("LORAFORGE_MAX_REQUEST_BODY_BYTES", str(10 * 1024 * 1024))
+            ),
         )
 
 
